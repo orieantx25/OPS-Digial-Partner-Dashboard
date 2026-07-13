@@ -1,0 +1,16 @@
+{
+  "name": "dp-analytics-platform",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Digital Partners Analytics Platform v2",
+  "scripts": {
+    "dev": "npm run dev --prefix frontend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "dev:backend": "backend\\.venv\\Scripts\\uvicorn app.main:app --reload --port 8000",
+    "build": "npm run build --prefix frontend",
+    "start": "npm run start --prefix frontend",
+    "test": "npm run test --prefix frontend",
+    "install:frontend": "npm install --prefix frontend",
+    "setup:backend": "cd backend && python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt"
+  }
+}

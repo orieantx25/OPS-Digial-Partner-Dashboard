@@ -7,7 +7,7 @@ import { EmptyDatasetBanner } from '@/components/dashboard/empty-dataset-banner'
 import { QuickUploadModal } from '@/components/upload/quick-upload-modal';
 import { LeadExplorerDrawer } from '@/components/leads/lead-explorer-drawer';
 import { useDatasetStats } from '@/hooks/use-dataset-stats';
-import { useAuthBootstrap } from '@/hooks/use-auth-bootstrap';
+import { canUpload, useAuthBootstrap } from '@/hooks/use-auth-bootstrap';
 
 /** Pages where the global filter bar does not apply (ops/upload tools). */
 const HIDE_FILTER_BAR = new Set(['/upload', '/block-payment']);
@@ -29,7 +29,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-bg">
       <Sidebar />
-      <QuickUploadModal />
+      {canUpload() && <QuickUploadModal />}
       <LeadExplorerDrawer />
       <div className="ml-52 min-h-screen flex flex-col">
         {showFilterBar && <FilterBar />}

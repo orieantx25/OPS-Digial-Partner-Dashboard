@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { useMemo } from 'react';
 import { FilterParams, UserInfo } from '@/types';
+import { useDebouncedValue } from '@/hooks/use-fetch';
 
 interface AppState {
   user: UserInfo | null;
@@ -65,13 +66,25 @@ export function getEffectiveFilters(): FilterParams {
   };
 }
 
-/** Subscribe to store so dashboards refetch when the top filter bar changes. */
+/** Subscribe to store so dashboards refetch when the top filter bar changes.
+ * globalSearch is debounced so typing does not refetch on every keystroke. */
 export function useEffectiveFilters(): FilterParams {
   const filters = useAppStore((s) => s.filters);
   const drillDown = useAppStore((s) => s.drillDown);
   const globalSearch = useAppStore((s) => s.globalSearch);
-  return useMemo(
-    () => getEffectiveFilters(),
-    [filters, drillDown, globalSearch]
-  );
+  const debouncedSearch = useDebouncedValue(globalSearch, 350);
+
+  return useMemo(() => {
+    const hasDateRange = Boolean(filters.date_from || filters.date_to);
+    return {
+      ...filters,
+      ...(hasDateRange
+        ? { month: undefined, year: undefined, week: undefined, quarter: undefined }
+        : {}),
+      partner: drillDown.partner ? [drillDown.partner] : filters.partner,
+      state: drillDown.state ? [drillDown.state] : filters.state,
+      city: drillDown.city ? [drillDown.city] : filters.city,
+      search: debouncedSearch || filters.search,
+    };
+  }, [filters, drillDown, debouncedSearch]);
 }

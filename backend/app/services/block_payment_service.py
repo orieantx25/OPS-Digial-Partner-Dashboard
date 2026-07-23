@@ -40,6 +40,61 @@ def normalize_match_email(value: Optional[str]) -> Optional[str]:
     return email if email and "@" in email else None
 
 
+# Sheets: REGEXEXTRACT after application-fee"].*?utm_source "…" / utm_campaign "…"
+_UTM_SOURCE_RE = re.compile(
+    r'application-fee["\]]+.*?utm_source\s*"([^"]+)"',
+    re.IGNORECASE | re.DOTALL,
+)
+_UTM_CAMPAIGN_RE = re.compile(
+    r'application-fee["\]]+.*?utm_campaign\s*"([^"]+)"',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _needs_utm_derive(value: Optional[str]) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    return not text or text.lower() in {"not found", "none", "null", "nan"}
+
+
+def extract_utm_source_at_payment(utm_activity: Optional[str]) -> Optional[str]:
+    """Derive Source at Payment from Utm Activity (application-fee → utm_source)."""
+    if utm_activity is None:
+        return None
+    text = str(utm_activity)
+    if not text.strip():
+        return None
+    match = _UTM_SOURCE_RE.search(text)
+    return match.group(1).strip() if match else None
+
+
+def extract_utm_campaign_at_payment(utm_activity: Optional[str]) -> Optional[str]:
+    """Derive Campaign at Payment from Utm Activity (application-fee → utm_campaign)."""
+    if utm_activity is None:
+        return None
+    text = str(utm_activity)
+    if not text.strip():
+        return None
+    match = _UTM_CAMPAIGN_RE.search(text)
+    return match.group(1).strip() if match else None
+
+
+def fill_payment_utm_from_activity(
+    source_at_payment: Optional[str],
+    campaign_at_payment: Optional[str],
+    utm_activity: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Keep existing values; fill blanks / Not Found from utm_activity."""
+    source = None if _needs_utm_derive(source_at_payment) else str(source_at_payment).strip()
+    campaign = None if _needs_utm_derive(campaign_at_payment) else str(campaign_at_payment).strip()
+    if source is None:
+        source = extract_utm_source_at_payment(utm_activity)
+    if campaign is None:
+        campaign = extract_utm_campaign_at_payment(utm_activity)
+    return source, campaign
+
+
 def apply_block_payment_mapping(df: pl.DataFrame) -> pl.DataFrame:
     groups: Dict[str, List[str]] = {}
     for col in df.columns:
@@ -135,8 +190,23 @@ class BlockPaymentService:
                 mapped = mapped.with_columns(pl.lit(None).cast(pl.Utf8).alias(col))
 
         uploaded_at = datetime.utcnow().isoformat()
+        sources: List[Optional[str]] = []
+        campaigns: List[Optional[str]] = []
+        for row in mapped.select(
+            ["source_at_payment", "campaign_at_payment", "utm_activity"]
+        ).iter_rows(named=True):
+            source, campaign = fill_payment_utm_from_activity(
+                row.get("source_at_payment"),
+                row.get("campaign_at_payment"),
+                row.get("utm_activity"),
+            )
+            sources.append(source)
+            campaigns.append(campaign)
+
         normalized = (
             mapped.with_columns(
+                pl.Series("source_at_payment", sources, dtype=pl.Utf8),
+                pl.Series("campaign_at_payment", campaigns, dtype=pl.Utf8),
                 pl.col("email").map_elements(normalize_match_email, return_dtype=pl.Utf8).alias("match_email"),
                 pl.col("phone").map_elements(normalize_phone, return_dtype=pl.Utf8).alias("match_phone"),
                 pl.lit(uploaded_at).alias("uploaded_at"),

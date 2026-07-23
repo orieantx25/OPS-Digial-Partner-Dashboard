@@ -8,9 +8,10 @@ import { ChartPanel } from '@/components/charts/chart-panel';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { ClickableMetricBox, formatMetricBoxValue } from '@/components/dashboard/clickable-metric-box';
 import { ChartData } from '@/types';
-import { formatNumber, formatPct } from '@/lib/utils';
+import { cn, formatNumber, formatPct } from '@/lib/utils';
 import { AI_LEAD_FILTERS } from '@/lib/lead-filters';
 import { useLeadExplorerStore } from '@/store/lead-explorer-store';
+import { FetchingHint } from '@/components/dashboard/fetching-hint';
 
 const AI_METRICS = [
   { key: 'calls', label: 'Calls' },
@@ -38,7 +39,7 @@ export default function AiCallingPage() {
   const filters = useEffectiveFilters();
   const openExplorer = useLeadExplorerStore((s) => s.openExplorer);
 
-  const { data, loading } = useFetch({
+  const { data, loading, isFetching } = useFetch({
     fetcher: () => api.getAiCalling(filters),
     deps: [JSON.stringify(filters)],
   });
@@ -64,9 +65,13 @@ export default function AiCallingPage() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className={cn('space-y-4', isFetching && data && 'opacity-90')}>
       <PageHeader title="AI Calling Dashboard" />
-      {loading && <p className="text-text-secondary text-sm">Loading...</p>}
+      {loading && !data ? (
+        <p className="text-text-secondary text-sm">Loading...</p>
+      ) : (
+        <FetchingHint active={isFetching} />
+      )}
 
       <div className="grid grid-cols-12 gap-3">
         <div className="col-span-12 lg:col-span-8">

@@ -577,9 +577,8 @@ def stage_rank(value) -> int:
     return FUNNEL_STAGE_RANK[stage_to_funnel(value)]
 
 
-# Canonical partner names sourced from Col J "Partner (Auto)". Every spelling,
-# spacing and casing variant must collapse to exactly one of these so partner
-# analytics group correctly.
+# Canonical partner names for this dashboard. Only these five digital partners
+# are in scope — Unknown and any other source are dropped on ingest/sync/analytics.
 PARTNER_CANONICAL: List[str] = [
     "Careers360",
     "College Hai",
@@ -587,6 +586,8 @@ PARTNER_CANONICAL: List[str] = [
     "College Dunia",
     "College Wollege",
 ]
+
+PARTNER_CANONICAL_SET = frozenset(PARTNER_CANONICAL)
 
 # Partner commercials for ROI (advance paid + incentive per admission).
 # Course fee used in ROI math is configured in analytics — never surface that fee in UI copy.
@@ -657,6 +658,17 @@ def derive_partner_from_source(source: Optional[str]) -> str:
     if "collegedunia" in s or "college dunia" in s:
         return "College Dunia"
     return "Unknown"
+
+
+def is_digital_partner(partner: Optional[str]) -> bool:
+    """True when partner resolves to one of the five dashboard digital partners."""
+    if partner is None or not str(partner).strip():
+        return False
+    raw = str(partner).strip()
+    if raw in PARTNER_CANONICAL_SET:
+        return True
+    canon = canonical_partner(raw)
+    return canon in PARTNER_CANONICAL_SET
 
 
 def derive_campaign(

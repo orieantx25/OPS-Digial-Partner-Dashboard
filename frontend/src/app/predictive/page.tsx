@@ -4,14 +4,15 @@ import { api } from '@/lib/api';
 import { useFetch } from '@/hooks/use-fetch';
 import { useEffectiveFilters } from '@/store/app-store';
 import { ChartPanel } from '@/components/charts/chart-panel';
+import { FetchingHint } from '@/components/dashboard/fetching-hint';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { ChartData } from '@/types';
-import { formatNumber, formatPct } from '@/lib/utils';
+import { cn, formatNumber, formatPct } from '@/lib/utils';
 
 export default function PredictivePage() {
   const filters = useEffectiveFilters();
 
-  const { data, loading } = useFetch({
+  const { data, loading, isFetching } = useFetch({
     fetcher: () => api.getPredictive(filters),
     deps: [JSON.stringify(filters)],
   });
@@ -24,10 +25,13 @@ export default function PredictivePage() {
     (data?.block_amount_forecast as { period: string; value: number }[] | undefined) ?? [];
 
   return (
-    <div className="space-y-4">
+    <div className={cn('space-y-4', isFetching && data && 'opacity-90')}>
       <PageHeader title="Predictive Analytics" />
-      {loading && <p className="text-text-secondary text-sm">Loading...</p>}
-
+      {loading && !data ? (
+        <p className="text-text-secondary text-sm">Loading...</p>
+      ) : (
+        <FetchingHint active={isFetching} />
+      )}
       <SectionHeader
         title="Lead Forecast"
         subtitle="Current leads vs expected July–August · based on all previous months"

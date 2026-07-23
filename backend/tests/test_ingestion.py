@@ -10,6 +10,7 @@ import pytest
 
 from app.config import Settings
 from app.services.analytics_service import AnalyticsEngine
+from app.services.empty_defaults import KPI_DEFINITIONS
 from app.services.ingestion_service import IngestionEngine, normalize_header, normalize_partner
 from app.infrastructure.duckdb_repo import DuckDBRepository, AnalyticsCache
 
@@ -36,7 +37,7 @@ def sample_csv_bytes():
         "Email": ["alice@test.com", "bob@test.com", "carol@test.com"],
         "Contact Stage": ["1 Dial", "Never Dialed", "2 Dial"],
         "Main Lead Stages": ["MQL", "Lead", "SQL"],
-        "Partner (Auto)": ["Partner A", "Partner B", "Partner A"],
+        "Contact Source": ["careers360", "kollegeapply", "college hai"],
         "State": ["Maharashtra", "Karnataka", "Delhi"],
         "Date": ["2024-01-15", "2024-02-20", "2024-03-10"],
         "Total Dialed Count": [1, 0, 2],
@@ -79,6 +80,7 @@ def test_minimal_columns_ingest(temp_settings):
     df = pl.DataFrame({
         "Prospect Creation Date": ["2024-01-15", "2024-02-20"],
         "Prospect ID": ["X1", "X2"],
+        "Contact Source": ["careers360", "collegedunia"],
     })
     buf = io.BytesIO()
     df.write_csv(buf)
@@ -138,7 +140,7 @@ def test_replace_upload(temp_settings, sample_csv_bytes):
         "Email": ["n1@test.com", "n2@test.com"],
         "Contact Stage": ["1 Dial", "2 Dial"],
         "Main Lead Stages": ["Lead", "MQL"],
-        "Partner (Auto)": ["Partner X", "Partner Y"],
+        "Contact Source": ["careers360", "college dunia"],
         "State": ["Kerala", "Punjab"],
         "Date": ["2024-05-01", "2024-05-02"],
     })
@@ -159,7 +161,7 @@ def test_incremental_ingestion(temp_settings, sample_csv_bytes):
         "Email": ["dave@test.com"],
         "Contact Stage": ["1 Dial"],
         "Main Lead Stages": ["Lead"],
-        "Partner (Auto)": ["Partner C"],
+        "Contact Source": ["college wollege"],
         "State": ["Gujarat"],
         "Date": ["2024-04-01"],
     })
@@ -189,7 +191,7 @@ def test_empty_dataset_analytics(temp_settings):
 
     filters = FilterParams()
     kpis = analytics.get_executive_kpis(filters)
-    assert len(kpis) == 15
+    assert len(kpis) == len(KPI_DEFINITIONS)
     assert all(k.current == 0 for k in kpis)
 
     charts = analytics.get_executive_charts(filters)
@@ -213,12 +215,12 @@ def test_excel_datetime_validation(temp_settings):
     ws = wb.active
     headers = [
         "Prospect ID", "Name", "Email", "Contact Stage", "Main Lead Stages",
-        "Partner (Auto)", "State", "Date",
+        "Contact Source", "State", "Date",
     ]
     ws.append(headers)
     ws.append([
         10001, "Test Lead", "test@example.com", "1 Dial", "MQL",
-        "Partner A", "Maharashtra", datetime(2024, 3, 15),
+        "careers360", "Maharashtra", datetime(2024, 3, 15),
     ])
     buf = io.BytesIO()
     wb.save(buf)
@@ -235,7 +237,7 @@ def test_float_prospect_id(temp_settings):
         "Email": ["a@test.com"],
         "Contact Stage": ["1 Dial"],
         "Main Lead Stages": ["Lead"],
-        "Partner (Auto)": ["Partner A"],
+        "Contact Source": ["careers360"],
         "State": ["Delhi"],
         "Date": ["2024-01-01"],
     })
@@ -315,6 +317,139 @@ def test_funnel_analytics(temp_settings, sample_csv_bytes):
     assert funnel.series[0].data[0] == 3
 
 
+def test_block_amount_paid_from_contact_stage_only(temp_settings):
+    """block_amount_paid only from Contact Stage = Block Amount Paid (not lead stage)."""
+    df = pl.DataFrame({
+        "Prospect ID": ["B1", "B2", "B3", "B4", "B5"],
+        "Contact Stage": [
+            "Block Amount Paid",
+            "Admission",
+            "Counseled",
+            "Offer Letter Released",
+            "Counseled",
+        ],
+        "Main Lead Stages": [
+            "Sign Up",
+            "Sign Up",
+            "Block Amount Paid",  # lead stage alone must NOT set the flag
+            "Block Amount Paid",
+            "Sign Up",
+        ],
+        "Block Amount Paid": [0, 0, 1, 1, 1],
+        "Contact Source": ["careers360"] * 5,
+        "Date": ["2026-01-01"] * 5,
+    })
+    buf = io.BytesIO()
+    df.write_csv(buf)
+    engine = IngestionEngine(settings=temp_settings, duck_repo=DuckDBRepository(temp_settings))
+    report = engine.process_upload_batch([("block_contact.csv", buf.getvalue())])
+    assert report.total_rows_accepted == 5, report.issues
+
+    rows = engine.duck_repo.query_dicts(
+        "SELECT prospect_id, block_amount_paid FROM master_dataset ORDER BY prospect_id",
+        [],
+    )
+    by_id = {r["prospect_id"]: r for r in rows}
+    assert by_id["B1"]["block_amount_paid"] is True   # contact stage
+    assert by_id["B2"]["block_amount_paid"] is False  # Admission
+    assert by_id["B3"]["block_amount_paid"] is False  # lead stage only — ignored
+    assert by_id["B4"]["block_amount_paid"] is False  # lead stage only — ignored
+    assert by_id["B5"]["block_amount_paid"] is False  # bool alone ignored
+
+
+def test_lsq_prospect_stage_sets_block_amount_paid(temp_settings):
+    """LSQ ProspectStage (CRM Contact Stage) = Block Amount Paid sets the flag."""
+    from app.services.leadsquared_mapper import map_leads_to_dataframe
+
+    leads = [
+        {
+            "ProspectID": "bap-lsq-1",
+            "FirstName": "Aarohan",
+            "LastName": "prasad",
+            "EmailAddress": "aarohan@test.com",
+            "Source": "College Hai",
+            "CreatedOn": "2026-01-15 10:00:00",
+            "ProspectStage": "Block Amount Paid",
+            "mx_Main_Lead_Stages": "Offer Letter Released",
+            "mx_Contact_Stage": None,
+        },
+        {
+            "ProspectID": "bap-lsq-2",
+            "FirstName": "Other",
+            "LastName": "Lead",
+            "EmailAddress": "other@test.com",
+            "Source": "Careers360",
+            "CreatedOn": "2026-01-15 10:00:00",
+            "ProspectStage": "Counseled",
+            "mx_Main_Lead_Stages": "Block Amount Paid",
+            "mx_Contact_Stage": None,
+        },
+    ]
+    mapped = map_leads_to_dataframe(leads)
+    engine = IngestionEngine(settings=temp_settings, duck_repo=DuckDBRepository(temp_settings))
+    result = engine.process_lsq_sync_batch(mapped, batch_id="test-bap", replace=True)
+    assert result["rows_accepted"] == 2, result
+
+    rows = engine.duck_repo.query_dicts(
+        "SELECT prospect_id, contact_stage, lead_stage, block_amount_paid "
+        "FROM master_dataset ORDER BY prospect_id",
+        [],
+    )
+    by_id = {r["prospect_id"]: r for r in rows}
+    assert by_id["bap-lsq-1"]["contact_stage"] == "Block Amount Paid"
+    assert by_id["bap-lsq-1"]["lead_stage"] == "Offer Letter Released"
+    assert by_id["bap-lsq-1"]["block_amount_paid"] is True
+    assert by_id["bap-lsq-2"]["block_amount_paid"] is False
+
+
+def test_recompute_block_amount_paid_by_partner(temp_settings):
+    """Recompute uses Contact Stage only (exact Block Amount Paid)."""
+    df = pl.DataFrame({
+        "Prospect ID": ["C1", "C2", "C3", "C4", "C5"],
+        "Contact Stage": [
+            "Block Amount Paid",
+            "Block Amount Paid",
+            "Admission",
+            "Block Amount Paid",
+            "Counseled",
+        ],
+        "Main Lead Stages": [
+            "Sign Up",
+            "Sign Up",
+            "Block Amount Paid",  # must not count
+            "Sign Up",
+            "Block Amount Paid",
+        ],
+        "Contact Source": [
+            "kollegeapply",
+            "college hai",
+            "careers360",
+            "collegedunia",
+            "college wollege",
+        ],
+        "Date": ["2026-01-01"] * 5,
+    })
+    buf = io.BytesIO()
+    df.write_csv(buf)
+    engine = IngestionEngine(settings=temp_settings, duck_repo=DuckDBRepository(temp_settings))
+    report = engine.process_upload_batch([("partners_block.csv", buf.getvalue())])
+    assert report.total_rows_accepted == 5, report.issues
+
+    path = temp_settings.parquet_dir / "master_dataset.parquet"
+    master = pl.read_parquet(path).with_columns(pl.lit(True).alias("block_amount_paid"))
+    master.write_parquet(path)
+
+    stats = engine.recompute_block_amount_paid()
+    assert stats["updated"] is True
+    assert stats["block_paid_after"] == 3
+    by = stats["block_paid_by_partner"]
+    assert by.get("Kollege Apply") == 1
+    assert by.get("College Hai") == 1
+    assert by.get("College Dunia") == 1
+    assert "Careers360" not in by
+    assert "College Wollege" not in by
+
+
 def test_stage_to_funnel_mapping():
     """Raw lead/contact stage strings map to the correct funnel stage."""
     from app.domain.schema import stage_to_funnel
@@ -354,6 +489,7 @@ def test_funnel_derivation_from_text_stages(temp_settings):
             "Sign Up", "Interview Qualified", "Offer Letter Released",
             "Pre Sign Up", "uGNET Scheduled",
         ],
+        "Contact Source": ["careers360"] * 5,
         "Connected (Auto)": [0, 0, 0, 0, 0],
         "Date": ["2026-01-01"] * 5,
     })
@@ -400,6 +536,7 @@ def test_vectorized_validation_counts(temp_settings):
     df = pl.DataFrame({
         "Prospect ID": ["P1", "P2", "P2", "", "P3", "P4"],
         "Main Lead Stages": ["Sign Up"] * 6,
+        "Contact Source": ["careers360"] * 6,
         "Date": [
             "2026-01-01", "2026-01-02", "2026-01-03",
             "2026-01-04", "not-a-date", "2026-01-06",
@@ -424,6 +561,7 @@ def test_blank_date_is_accepted(temp_settings):
     df = pl.DataFrame({
         "Prospect ID": ["Q1", "Q2"],
         "Main Lead Stages": ["Sign Up", "Sign Up"],
+        "Contact Source": ["careers360", "kollegeapply"],
         "Date": ["", "2026-02-01"],
     })
     buf = io.BytesIO()
@@ -470,6 +608,7 @@ def test_connected_ai_ac_bifurcation(temp_settings):
             "Sign Up",
             "Lead Capture",
         ],
+        "Contact Source": ["careers360"] * 6,
         "Last Activity": [
             "Called",
             "Lead Capture",
@@ -561,8 +700,8 @@ def test_new_production_header_layout(temp_settings):
 
 
 def test_date_auto_priority_over_other_date_columns(temp_settings):
-    headers = ["Prospect ID", "Prospect Creation Date", "Date (Auto)", "Main Lead Stages"]
-    row = ["X1", "not-a-valid-date", "8-May-2026", "Sign Up"]
+    headers = ["Prospect ID", "Prospect Creation Date", "Date (Auto)", "Main Lead Stages", "Contact Source"]
+    row = ["X1", "not-a-valid-date", "8-May-2026", "Sign Up", "careers360"]
     df = pl.DataFrame([row], schema=headers, orient="row")
     buf = io.BytesIO()
     df.write_csv(buf)
@@ -575,6 +714,7 @@ def test_excel_serial_date(temp_settings):
     df = pl.DataFrame({
         "Prospect ID": ["S1"],
         "Main Lead Stages": ["Sign Up"],
+        "Contact Source": ["careers360"],
         "Date (Auto)": [45321.0],
     })
     buf = io.BytesIO()
@@ -591,6 +731,16 @@ def test_derive_partner_from_source():
     assert derive_partner_from_source("College Hai leads") == "College Hai"
     assert derive_partner_from_source("careers360") == "Careers360"
     assert derive_partner_from_source("random source") == "Unknown"
+
+
+def test_is_digital_partner():
+    from app.domain.schema import is_digital_partner
+
+    assert is_digital_partner("Careers360") is True
+    assert is_digital_partner("Kollege Apply") is True
+    assert is_digital_partner("Unknown") is False
+    assert is_digital_partner(None) is False
+    assert is_digital_partner("") is False
 
 
 def test_college_wollege_campaign_includes_medium(temp_settings):
@@ -614,6 +764,7 @@ def test_leads_not_touched_kpi_uses_last_activity(temp_settings):
     df = pl.DataFrame({
         "Prospect ID": ["L1", "L2", "L3"],
         "Main Lead Stages": ["Sign Up", "Sign Up", "Sign Up"],
+        "Contact Source": ["careers360", "college hai", "collegedunia"],
         "Date (Auto)": ["8-May-2026", "8-May-2026", "8-May-2026"],
         "Last Activity": ["Lead Capture", "Called", "lead capture"],
         "Total Interacted Count": [0, 0, 5],
@@ -650,8 +801,8 @@ def test_failed_replace_upload_preserves_existing_data(temp_settings, sample_csv
     assert engine.duck_repo.get_row_count() == 3
 
 
-def test_persona_last_24h_excludes_kollege_and_other_persona(temp_settings):
-    """Created last 24h excl. Kollege; Other Persona = non-blank non-B.Tech; no activity → interested 0."""
+def test_persona_last_24h_created_includes_kollege(temp_settings):
+    """Created last 24h includes Kollege; Other Persona = non-blank non-B.Tech; no activity → interested 0."""
     from datetime import datetime, timedelta
 
     from app.domain.models import FilterParams
@@ -697,64 +848,101 @@ def test_persona_last_24h_excludes_kollege_and_other_persona(temp_settings):
 
     assert result["summary"]["know_more_about_btech"] == 3
     assert result["summary"]["other_persona"] == 1
-    # No activity sheet → interested KPI is 0
     assert result["summary"]["know_more_about_btech_last_24h"] == 0
-    # Created excl Kollege = p1, p4, p5 (not p2 Kollege, not p3 old)
-    assert result["summary"]["created_last_24h"] == 3
+    # Created incl Kollege = p1, p2, p4, p5 (not p3 old)
+    assert result["summary"]["created_last_24h"] == 4
     chart = result["charts"]["stage_last_24h"]
     assert chart.chart_type == "pie"
-    assert chart.series[0].data == [3, 0]
+    assert chart.series[0].data == [4, 0]
 
 
 def test_persona_activity_created_vs_interested(temp_settings):
-    """Last 24h chart compares created leads vs activity-matched Know More about B.Tech."""
+    """Last 24h Interested = Know More event + activity_date in 24h; Kollege included."""
     from datetime import datetime, timedelta
 
     from app.domain.models import FilterParams
     from app.services.persona_activity_service import PersonaActivityService
 
     now = datetime.utcnow()
-    recent = (now - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    recent = now.strftime("%Y-%m-%d %H:%M:%S")
+    act_recent = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+    act_old = (now - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
 
     master = pl.DataFrame({
-        "Prospect ID": ["fa6ad873-3364-478a-85f7-3411c8e4c643", "other-id", "third-id"],
+        "Prospect ID": [
+            "fa6ad873-3364-478a-85f7-3411c8e4c643",
+            "other-id",
+            "third-id",
+            "kollege-id",
+            "wrong-event-id",
+        ],
         "Email": [
             "archanadattatrygaikwad1987@gmail.com",
             "match-by-email@test.com",
             "nomatch@test.com",
+            "kollege@test.com",
+            "wrong@test.com",
         ],
-        "Main Lead Stages": ["Sign Up", "Sign Up", "Sign Up"],
+        "Main Lead Stages": ["Sign Up"] * 5,
         "Persona": [
             "Know More about B. Tech",
             "Know More about B.Tech",
             "Career Explorer",
+            "Know More about B.Tech",
+            "Know More about B.Tech",
         ],
-        "Contact Source": ["Careers360", "College Hai", "College Dunia"],
-        "Date": [recent, recent, recent],
+        "Contact Source": [
+            "Careers360",
+            "College Hai",
+            "College Dunia",
+            "Kollege Apply",
+            "Careers360",
+        ],
+        "Date": [recent] * 5,
     })
     buf = io.BytesIO()
     master.write_csv(buf)
     engine = IngestionEngine(settings=temp_settings, duck_repo=DuckDBRepository(temp_settings))
     report = engine.process_upload_batch([("master.csv", buf.getvalue())])
-    assert report.total_rows_accepted == 3, report.issues
+    assert report.total_rows_accepted == 5, report.issues
 
     activity = pl.DataFrame({
         "Prospect Id": [
             "fa6ad873-3364-478a-85f7-3411c8e4c643",
             "",
             "missing-id",
+            "kollege-id",
+            "wrong-event-id",
+            "fa6ad873-3364-478a-85f7-3411c8e4c643",
         ],
         "Email Address": [
             "archanadattatrygaikwad1987@gmail.com",
             "match-by-email@test.com",
             "nobody@test.com",
+            "kollege@test.com",
+            "wrong@test.com",
+            "archanadattatrygaikwad1987@gmail.com",
         ],
-        "Phone Number": ["", "", ""],
-        "Contact Name": ["Archana", "Email Match", "Nobody"],
-        "Activity Id": ["a1", "a2", "a3"],
-        "Activity Date": ["2026-07-10 12:00:00 PM"] * 3,
-        "Activity Modified On": ["2026-07-10 12:00:00 PM"] * 3,
-        "Notes": ["persona=Know More about B. Tech"] * 3,
+        "Phone Number": [""] * 6,
+        "Contact Name": ["Archana", "Email Match", "Nobody", "Kollege", "Wrong", "Old"],
+        "Activity Id": ["a1", "a2", "a3", "a4", "a5", "a6"],
+        "Activity Date": [
+            act_recent,
+            act_recent,
+            act_recent,
+            act_recent,
+            act_recent,
+            act_old,
+        ],
+        "Activity Modified On": [act_recent] * 6,
+        "Notes": [
+            "Know More about B.Tech",
+            "Know More about B. Tech",
+            "Know More about B.Tech",
+            "Know More about B.Tech",
+            "Lead Capture",
+            "Know More about B.Tech",
+        ],
     })
     act_buf = io.BytesIO()
     activity.write_csv(act_buf)
@@ -762,13 +950,13 @@ def test_persona_activity_created_vs_interested(temp_settings):
         duck_repo=DuckDBRepository(temp_settings), settings=temp_settings
     )
     upload = svc.upload_sheet("persona_24h.csv", act_buf.getvalue())
-    assert upload["row_count"] == 3
+    assert upload["row_count"] == 6
 
     analytics = AnalyticsEngine(duck_repo=DuckDBRepository(temp_settings))
     result = analytics.get_persona_analytics(FilterParams())
-    assert result["summary"]["created_last_24h"] == 3
-    # Two activity matches that are Know More about B.Tech (third is Career Explorer)
-    assert result["summary"]["know_more_about_btech_last_24h"] == 2
-    assert result["charts"]["stage_last_24h"].series[0].data == [3, 2]
-    assert sum(result["charts"]["partner_last_24h"].series[0].data) == 2
-    assert upload["row_count"] == 3
+    assert result["summary"]["created_last_24h"] == 5
+    # Matches: prospect id, email match, kollege — not missing-id, not wrong event, not old activity
+    assert result["summary"]["know_more_about_btech_last_24h"] == 3
+    assert result["charts"]["stage_last_24h"].series[0].data == [5, 3]
+    assert sum(result["charts"]["partner_last_24h"].series[0].data) == 3
+    assert upload["row_count"] == 6

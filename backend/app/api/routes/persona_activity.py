@@ -2,8 +2,6 @@
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
-from app.api.dependencies import require_write_access
-from app.domain.models import UserInfo
 from app.logging_config import get_logger
 from app.services.persona_activity_service import PersonaActivityService
 
@@ -25,7 +23,6 @@ async def persona_activity_status(
 @router.post("/upload")
 async def upload_persona_activity_sheet(
     file: UploadFile = File(...),
-    user: UserInfo = Depends(require_write_access),
     service: PersonaActivityService = Depends(get_persona_activity_service),
 ):
     if not file.filename:
@@ -52,7 +49,7 @@ async def upload_persona_activity_sheet(
         result = service.upload_sheet(file.filename, content)
         logger.info(
             "persona_activity_uploaded",
-            user=user.username,
+            user="anonymous",
             filename=file.filename,
             rows=result.get("row_count"),
         )

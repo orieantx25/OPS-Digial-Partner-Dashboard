@@ -8,9 +8,8 @@ import { cn } from '@/lib/utils';
 import { summarizeRejections } from '@/lib/upload-utils';
 import { formatNumber } from '@/lib/utils';
 import { useUploadStore } from '@/store/upload-store';
-import { canUpload, loginUser } from '@/hooks/use-auth-bootstrap';
 
-type Step = 'pick' | 'uploading' | 'done' | 'error' | 'login';
+type Step = 'pick' | 'uploading' | 'done' | 'error';
 
 export function QuickUploadModal() {
   const { isOpen, closeUpload, bumpDataRefresh } = useUploadStore();
@@ -19,10 +18,6 @@ export function QuickUploadModal() {
   const [dragging, setDragging] = useState(false);
   const [report, setReport] = useState<UploadReport | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [username, setUsername] = useState('ops');
-  const [password, setPassword] = useState('ops123');
-  const [loginLoading, setLoginLoading] = useState(false);
-  const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
   const [percent, setPercent] = useState(0);
   const [phase, setPhase] = useState('Starting');
   const [rows, setRows] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
@@ -42,7 +37,6 @@ export function QuickUploadModal() {
     setReport(null);
     setError(null);
     setDragging(false);
-    setPendingFiles(null);
     setPercent(0);
     setPhase('Starting');
     setRows({ done: 0, total: 0 });
@@ -65,9 +59,6 @@ export function QuickUploadModal() {
   }, [isOpen, closeUpload, step]);
 
   const pollStatus = useCallback((jobId: string) => {
-    // Large files hold the server busy during normalization, so individual
-    // status polls can time out. The job keeps running server-side, so we keep
-    // retrying and only give up after a long grace window with no contact.
     const GRACE_MS = 8 * 60 * 1000;
     let lastContact = Date.now();
     const tick = async () => {
@@ -99,7 +90,6 @@ export function QuickUploadModal() {
           setStep('error');
           return;
         }
-        // Server is busy processing; keep the last progress and retry.
         setBusy(true);
         pollRef.current = setTimeout(tick, 2000);
       }
@@ -122,15 +112,8 @@ export function QuickUploadModal() {
       setPercent(0);
       pollStatus(job_id);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Upload failed';
-      if (msg.toLowerCase().includes('write access') || msg.includes('403')) {
-        setPendingFiles(files);
-        setStep('login');
-        setError('Sign in with an Operations or Admin account to upload.');
-      } else {
-        setError(msg);
-        setStep('error');
-      }
+      setError(e instanceof Error ? e.message : 'Upload failed');
+      setStep('error');
     }
   }, [pollStatus]);
 
@@ -144,30 +127,7 @@ export function QuickUploadModal() {
       setStep('error');
       return;
     }
-    if (!canUpload()) {
-      setPendingFiles(files);
-      setStep('login');
-      return;
-    }
     startUpload(files);
-  };
-
-  const handleLogin = async () => {
-    setLoginLoading(true);
-    setError(null);
-    const ok = await loginUser(username, password);
-    setLoginLoading(false);
-    if (!ok) {
-      setError('Invalid username or password');
-      return;
-    }
-    if (pendingFiles?.length) {
-      const files = pendingFiles;
-      setPendingFiles(null);
-      startUpload(files);
-    } else {
-      setStep('pick');
-    }
   };
 
   const onDrop = (e: React.DragEvent) => {
@@ -307,40 +267,6 @@ export function QuickUploadModal() {
             </div>
             );
           })()}
-
-          {step === 'login' && (
-            <div className="space-y-3">
-              <p className="text-sm text-text-secondary">
-                {error || 'Sign in to upload data into MASTER_DATASET.'}
-              </p>
-              <input
-                className="input-field"
-                placeholder="Username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="username"
-              />
-              <input
-                className="input-field"
-                type="password"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-              />
-              <button
-                type="button"
-                className="btn-primary w-full"
-                disabled={loginLoading}
-                onClick={handleLogin}
-              >
-                {loginLoading ? 'Signing in…' : 'Sign in & Upload'}
-              </button>
-              <button type="button" className="btn-secondary w-full text-xs" onClick={reset}>
-                Back
-              </button>
-            </div>
-          )}
 
           {step === 'error' && (
             <div className="space-y-3">

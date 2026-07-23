@@ -56,8 +56,71 @@ class AnalyticsEngine:
         return filters.model_dump(exclude_none=True)
 
     def _has_data(self) -> bool:
-        return self.duck_repo.master_exists() and self.duck_repo.get_row_count() > 0
+        if not self.duck_repo.master_exists():
+            return False
+        return self.duck_repo.get_row_count() > 0
 
+    def get_dataset_stats(self) -> Dict[str, Any]:
+        cached = self.cache.get("dataset_stats", {})
+        if cached is not None:
+            return cached
+        if not self.duck_repo.master_exists():
+            result = {"total_rows": 0, "has_data": False}
+            self.cache.set("dataset_stats", {}, result)
+            return result
+        # Count only the five digital partners so the UI record total matches charts.
+        placeholders = ", ".join(["?"] * len(PARTNER_CANONICAL))
+        rows = self.duck_repo.query_dicts(
+            f"SELECT COUNT(*) AS n FROM {MASTER_DATASET_TABLE} "
+            f"WHERE partner IN ({placeholders})",
+            list(PARTNER_CANONICAL),
+        )
+        total = int(rows[0]["n"]) if rows else 0
+        result = {
+            "total_rows": total,
+            "has_data": total > 0 or self.duck_repo.master_exists(),
+        }
+        self.cache.set("dataset_stats", {}, result)
+        return result
+
+    def get_filter_options(self) -> Dict[str, List[str]]:
+        cached = self.cache.get("filter_options", {})
+        if cached is not None:
+            return cached
+        if not self.duck_repo.master_exists():
+            result = {
+                "partners": list(PARTNER_CANONICAL),
+                "states": [], "cities": [], "personas": [],
+                "lead_stages": [], "contact_stages": [], "ai_statuses": [],
+                "campaigns": [], "sources": [], "mediums": [], "devices": [],
+                "months": [], "years": [],
+            }
+            self.cache.set("filter_options", {}, result)
+            return result
+        options: Dict[str, List[str]] = {}
+        for field, col in [
+            ("partners", "partner"), ("states", "state"), ("cities", "city"),
+            ("personas", "persona"), ("lead_stages", "lead_stage"),
+            ("contact_stages", "contact_stage"), ("ai_statuses", "ai_status"),
+            ("campaigns", "campaign"), ("sources", "source"), ("mediums", "medium"),
+            ("devices", "device"), ("months", "month"),
+        ]:
+            rows = self.duck_repo.query_dicts(
+                f"SELECT DISTINCT {col} AS val FROM {MASTER_DATASET_TABLE} "
+                f"WHERE {col} IS NOT NULL ORDER BY val"
+            )
+            options[field] = [r["val"] for r in rows if r["val"]]
+
+        # Partner dropdown: only the five digital partners (never Unknown).
+        options["partners"] = list(PARTNER_CANONICAL)
+
+        year_rows = self.duck_repo.query_dicts(
+            f"SELECT DISTINCT year AS val FROM {MASTER_DATASET_TABLE} "
+            f"WHERE year IS NOT NULL ORDER BY val"
+        )
+        options["years"] = [str(r["val"]) for r in year_rows]
+        self.cache.set("filter_options", {}, options)
+        return options
     @staticmethod
     def _ai_contacted_condition(available: set) -> str:
         """SQL predicate: lead was touched by the AI bot (Col D or stored flags)."""
@@ -216,9 +279,21 @@ class AnalyticsEngine:
             clauses.append(f"{prefix}year = ?")
             params.append(filters.year)
         if filters.partner:
-            placeholders = ", ".join(["?"] * len(filters.partner))
+            allowed = [
+                p for p in filters.partner
+                if canonical_partner(p) in PARTNER_CANONICAL
+                or p in PARTNER_CANONICAL
+            ]
+            # Intersect UI selection with the five digital partners only.
+            partners = allowed or list(PARTNER_CANONICAL)
+            placeholders = ", ".join(["?"] * len(partners))
             clauses.append(f"{prefix}partner IN ({placeholders})")
-            params.extend(filters.partner)
+            params.extend(partners)
+        else:
+            # Dashboard scope: always limit to the five digital partners.
+            placeholders = ", ".join(["?"] * len(PARTNER_CANONICAL))
+            clauses.append(f"{prefix}partner IN ({placeholders})")
+            params.extend(list(PARTNER_CANONICAL))
         if filters.state:
             placeholders = ", ".join(["?"] * len(filters.state))
             clauses.append(f"{prefix}state IN ({placeholders})")
@@ -278,41 +353,6 @@ class AnalyticsEngine:
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         return where, params
-
-    def get_dataset_stats(self) -> Dict[str, Any]:
-        return {
-            "total_rows": self.duck_repo.get_row_count(),
-            "has_data": self.duck_repo.master_exists(),
-        }
-
-    def get_filter_options(self) -> Dict[str, List[str]]:
-        if not self.duck_repo.master_exists():
-            return {
-                "partners": [], "states": [], "cities": [], "personas": [],
-                "lead_stages": [], "contact_stages": [], "ai_statuses": [],
-                "campaigns": [], "sources": [], "mediums": [], "devices": [],
-                "months": [], "years": [],
-            }
-        options = {}
-        for field, col in [
-            ("partners", "partner"), ("states", "state"), ("cities", "city"),
-            ("personas", "persona"), ("lead_stages", "lead_stage"),
-            ("contact_stages", "contact_stage"), ("ai_statuses", "ai_status"),
-            ("campaigns", "campaign"), ("sources", "source"), ("mediums", "medium"),
-            ("devices", "device"), ("months", "month"),
-        ]:
-            rows = self.duck_repo.query_dicts(
-                f"SELECT DISTINCT {col} AS val FROM {MASTER_DATASET_TABLE} "
-                f"WHERE {col} IS NOT NULL ORDER BY val"
-            )
-            options[field] = [r["val"] for r in rows if r["val"]]
-
-        year_rows = self.duck_repo.query_dicts(
-            f"SELECT DISTINCT year AS val FROM {MASTER_DATASET_TABLE} "
-            f"WHERE year IS NOT NULL ORDER BY val"
-        )
-        options["years"] = [str(r["val"]) for r in year_rows]
-        return options
 
     def get_executive_kpis(self, filters: FilterParams) -> List[KpiMetric]:
         if not self._has_data():
@@ -464,7 +504,10 @@ class AnalyticsEngine:
     def get_executive_charts(self, filters: FilterParams) -> Dict[str, ChartData]:
         if not self._has_data():
             return empty_executive_charts()
-        return {
+        cached = self.cache.get("executive_charts", self._filter_payload(filters))
+        if cached:
+            return cached
+        result = {
             "daily_leads": self.get_time_series_chart(filters, "daily"),
             "weekly_leads": self.get_time_series_chart(filters, "weekly"),
             "monthly_leads": self.get_time_series_chart(filters, "monthly"),
@@ -475,7 +518,10 @@ class AnalyticsEngine:
             "funnel": self.get_funnel_data(filters),
             "heatmap": self.get_heatmap_data(filters),
             "contactability_trend": self.get_contactability_trend(filters),
+            **self.get_metric_trends(filters),
         }
+        self.cache.set("executive_charts", self._filter_payload(filters), result)
+        return result
 
     def get_contactability_dashboard(self, filters: FilterParams) -> Dict[str, ChartData]:
         if not self._has_data():
@@ -579,7 +625,7 @@ class AnalyticsEngine:
 
         clash_map = {
             str(item["partner"]): int(item["count"])
-            for item in self.get_partner_counsellor_clashes(filters).get("by_partner", [])
+            for item in self._counsellor_clash_counts_by_partner(filters)
         }
         block_amounts = [int(r["block_amount"] or 0) for r in rows]
         clash_counts = [
@@ -636,9 +682,6 @@ class AnalyticsEngine:
             return empty_funnel()
 
         where, params = self._build_where(filters)
-        # Each non-Lead stage counts a boolean flag column. Guard against legacy
-        # datasets that predate a column (e.g. "interview") so the funnel never
-        # crashes with a Binder error — a missing column just counts as 0.
         stage_cols = {
             "Connected": "connected",
             "MQL": "mql",
@@ -651,20 +694,36 @@ class AnalyticsEngine:
             "Admission": "admission",
         }
         available = set(self.duck_repo.get_master_columns())
-        counts = []
+        select_parts = ["COUNT(*) AS lead_count"]
+        for stage, col in stage_cols.items():
+            alias = stage.lower().replace(" ", "_")
+            if col not in available:
+                select_parts.append(f"0 AS {alias}")
+            else:
+                select_parts.append(f"SUM(CASE WHEN {col} THEN 1 ELSE 0 END) AS {alias}")
+
+        ai_connected_expr = self._ai_connected_condition(available)
+        ac_connected_expr = self._ac_connected_condition(available)
+        select_parts.append(
+            f"SUM(CASE WHEN {ai_connected_expr} THEN 1 ELSE 0 END) AS ai_connected"
+        )
+        select_parts.append(
+            f"SUM(CASE WHEN {ac_connected_expr} THEN 1 ELSE 0 END) AS ac_connected"
+        )
+
+        row = self.duck_repo.query_dicts(
+            f"SELECT {', '.join(select_parts)} FROM {MASTER_DATASET_TABLE} {where}",
+            params,
+        )
+        cur = row[0] if row else {}
+
+        counts: List[int] = []
         for stage in FUNNEL_STAGES:
             if stage == "Lead":
-                expr = "COUNT(*)"
+                counts.append(int(cur.get("lead_count") or 0))
             else:
-                col = stage_cols[stage]
-                if col not in available:
-                    counts.append(0)
-                    continue
-                expr = f"SUM(CASE WHEN {col} THEN 1 ELSE 0 END)"
-            val = self.duck_repo.execute_scalar(
-                f"SELECT {expr} FROM {MASTER_DATASET_TABLE} {where}", params
-            )
-            counts.append(int(val or 0))
+                alias = stage.lower().replace(" ", "_")
+                counts.append(int(cur.get(alias) or 0))
 
         conversions = []
         drops = []
@@ -677,22 +736,9 @@ class AnalyticsEngine:
                 conversions.append(round(count / prev * 100, 2) if prev else 0)
                 drops.append(round((prev - count) / prev * 100, 2) if prev else 0)
 
-        ai_connected_expr = self._ai_connected_condition(available)
-        ac_connected_expr = self._ac_connected_condition(available)
-        split_row = self.duck_repo.query_dicts(
-            f"""
-            SELECT
-                SUM(CASE WHEN {ai_connected_expr} THEN 1 ELSE 0 END) AS ai_connected,
-                SUM(CASE WHEN {ac_connected_expr} THEN 1 ELSE 0 END) AS ac_connected
-            FROM {MASTER_DATASET_TABLE}
-            {where}
-            """,
-            params,
-        )
-        split = split_row[0] if split_row else {}
         connected_split = {
-            "ai_connected": int(split.get("ai_connected") or 0),
-            "ac_connected": int(split.get("ac_connected") or 0),
+            "ai_connected": int(cur.get("ai_connected") or 0),
+            "ac_connected": int(cur.get("ac_connected") or 0),
         }
 
         return ChartData(
@@ -805,18 +851,20 @@ class AnalyticsEngine:
             f"AND NOT ({btech_persona})"
         )
         persona_clause = f"{'AND' if where else 'WHERE'} persona IS NOT NULL AND {btech_persona}"
-        not_kollege = (
-            "REPLACE(LOWER(REPLACE(TRIM(COALESCE(partner, '')), '.', '')), ' ', '') "
-            "NOT IN ('kollegeapply', 'collegeapply', 'kollageapply')"
+        know_more_event = (
+            "REPLACE(LOWER(REPLACE(TRIM(CAST(COALESCE(a.notes, '') AS VARCHAR)), '.', '')), ' ', '') "
+            "= 'knowmoreaboutbtech'"
         )
-        # Leads created in the last 48 hours (main DB), excluding Kollege Apply.
-        # UI still labels this "Last 24h"; window is 48h by product request.
-        created_last_24h = (
-            f"date >= (CURRENT_TIMESTAMP - INTERVAL 48 HOUR) AND {not_kollege}"
+        activity_in_last_24h = (
+            "TRY_CAST(CAST(a.activity_date AS VARCHAR) AS TIMESTAMP) "
+            ">= (CURRENT_TIMESTAMP - INTERVAL 24 HOUR)"
         )
+        # Leads created in the last 24 hours (main DB), including Kollege Apply.
+        created_last_24h = "date >= (CURRENT_TIMESTAMP - INTERVAL 24 HOUR)"
         has_activity_sheet = self.duck_repo.persona_activity_exists()
 
-        # Activity-report matches → "interested" Know More about B.Tech (Last 24h).
+        # Interested = distinct leads matched to Know More about B.Tech activities
+        # in the last 24 hours (Kollege Apply included; master persona not required).
         activity_params: List[Any] = []
         if has_activity_sheet:
             matched_id_rows = self.duck_repo.query_dicts(
@@ -825,18 +873,22 @@ class AnalyticsEngine:
                     SELECT m.prospect_id
                     FROM {MASTER_DATASET_TABLE} m
                     INNER JOIN {PERSONA_ACTIVITY_TABLE} a
-                      ON LOWER(TRIM(COALESCE(m.prospect_id, '')))
-                       = LOWER(TRIM(COALESCE(a.prospect_id, '')))
-                    WHERE NULLIF(TRIM(COALESCE(a.prospect_id, '')), '') IS NOT NULL
+                      ON LOWER(TRIM(CAST(COALESCE(m.prospect_id, '') AS VARCHAR)))
+                       = LOWER(TRIM(CAST(COALESCE(a.prospect_id, '') AS VARCHAR)))
+                    WHERE NULLIF(TRIM(CAST(COALESCE(a.prospect_id, '') AS VARCHAR)), '') IS NOT NULL
                       AND m.prospect_id IS NOT NULL
+                      AND {know_more_event}
+                      AND {activity_in_last_24h}
                     UNION
                     SELECT m.prospect_id
                     FROM {MASTER_DATASET_TABLE} m
                     INNER JOIN {PERSONA_ACTIVITY_TABLE} a
-                      ON LOWER(TRIM(COALESCE(m.email, '')))
-                       = LOWER(TRIM(COALESCE(a.match_email, '')))
-                    WHERE a.match_email IS NOT NULL
+                      ON LOWER(TRIM(CAST(COALESCE(m.email, '') AS VARCHAR)))
+                       = LOWER(TRIM(CAST(COALESCE(a.match_email, '') AS VARCHAR)))
+                    WHERE NULLIF(TRIM(CAST(COALESCE(a.match_email, '') AS VARCHAR)), '') IS NOT NULL
                       AND m.prospect_id IS NOT NULL
+                      AND {know_more_event}
+                      AND {activity_in_last_24h}
                 ) matched
                 """
             )
@@ -852,8 +904,7 @@ class AnalyticsEngine:
         else:
             activity_matched = "FALSE"
 
-        # Interested = activity-report match + Know More about B.Tech + excl. Kollege Apply.
-        interested_last_24h = f"({activity_matched}) AND {not_kollege}"
+        interested_last_24h = f"({activity_matched})"
 
         empty_charts = {
             "partner_overall": ChartData(
@@ -928,32 +979,39 @@ class AnalyticsEngine:
             match_stats = self.duck_repo.query_dicts(
                 f"""
                 SELECT
-                    (SELECT COUNT(*) FROM {PERSONA_ACTIVITY_TABLE}) AS report_rows,
+                    (
+                        SELECT COUNT(*) FROM {PERSONA_ACTIVITY_TABLE} a
+                        WHERE {know_more_event} AND {activity_in_last_24h}
+                    ) AS report_rows,
                     (
                         SELECT COUNT(*) FROM (
                             SELECT DISTINCT
                                 COALESCE(
-                                    NULLIF(TRIM(COALESCE(a.activity_id, '')), ''),
-                                    LOWER(TRIM(COALESCE(a.prospect_id, ''))) || '|' ||
-                                    LOWER(TRIM(COALESCE(a.match_email, '')))
+                                    NULLIF(TRIM(CAST(COALESCE(a.activity_id, '') AS VARCHAR)), ''),
+                                    LOWER(TRIM(CAST(COALESCE(a.prospect_id, '') AS VARCHAR))) || '|' ||
+                                    LOWER(TRIM(CAST(COALESCE(a.match_email, '') AS VARCHAR)))
                                 ) AS row_key
                             FROM {PERSONA_ACTIVITY_TABLE} a
                             INNER JOIN {MASTER_DATASET_TABLE} m
-                              ON LOWER(TRIM(COALESCE(m.prospect_id, '')))
-                               = LOWER(TRIM(COALESCE(a.prospect_id, '')))
-                            WHERE NULLIF(TRIM(COALESCE(a.prospect_id, '')), '') IS NOT NULL
+                              ON LOWER(TRIM(CAST(COALESCE(m.prospect_id, '') AS VARCHAR)))
+                               = LOWER(TRIM(CAST(COALESCE(a.prospect_id, '') AS VARCHAR)))
+                            WHERE NULLIF(TRIM(CAST(COALESCE(a.prospect_id, '') AS VARCHAR)), '') IS NOT NULL
+                              AND {know_more_event}
+                              AND {activity_in_last_24h}
                             UNION
                             SELECT DISTINCT
                                 COALESCE(
-                                    NULLIF(TRIM(COALESCE(a.activity_id, '')), ''),
-                                    LOWER(TRIM(COALESCE(a.prospect_id, ''))) || '|' ||
-                                    LOWER(TRIM(COALESCE(a.match_email, '')))
+                                    NULLIF(TRIM(CAST(COALESCE(a.activity_id, '') AS VARCHAR)), ''),
+                                    LOWER(TRIM(CAST(COALESCE(a.prospect_id, '') AS VARCHAR))) || '|' ||
+                                    LOWER(TRIM(CAST(COALESCE(a.match_email, '') AS VARCHAR)))
                                 ) AS row_key
                             FROM {PERSONA_ACTIVITY_TABLE} a
                             INNER JOIN {MASTER_DATASET_TABLE} m
-                              ON LOWER(TRIM(COALESCE(m.email, '')))
-                               = LOWER(TRIM(COALESCE(a.match_email, '')))
-                            WHERE a.match_email IS NOT NULL
+                              ON LOWER(TRIM(CAST(COALESCE(m.email, '') AS VARCHAR)))
+                               = LOWER(TRIM(CAST(COALESCE(a.match_email, '') AS VARCHAR)))
+                            WHERE NULLIF(TRIM(CAST(COALESCE(a.match_email, '') AS VARCHAR)), '') IS NOT NULL
+                              AND {know_more_event}
+                              AND {activity_in_last_24h}
                         ) x
                     ) AS matched_report_rows
                 """
@@ -978,19 +1036,24 @@ class AnalyticsEngine:
             (other_persona_rows[0].get("other_persona") if other_persona_rows else 0) or 0
         )
 
-        # Created last 24h (all personas, excl. Kollege) vs activity Know More about B.Tech.
+        # Created last 24h (all personas, incl. Kollege) vs Know More activity matches.
+        # Use a CTE so partner WHERE placeholders bind before activity IN placeholders
+        # (DuckDB binds ? in appearance order across the full SQL text).
         compare_rows = self.duck_repo.query_dicts(
             f"""
+            WITH scoped AS (
+                SELECT * FROM {MASTER_DATASET_TABLE}
+                {where if where else ""}
+            )
             SELECT
                 SUM(CASE WHEN {created_last_24h} THEN 1 ELSE 0 END) AS created_last_24h,
                 SUM(
                     CASE
-                        WHEN {btech_persona} AND {interested_last_24h}
+                        WHEN {interested_last_24h}
                         THEN 1 ELSE 0
                     END
                 ) AS interested_btech_last_24h
-            FROM {MASTER_DATASET_TABLE}
-            {where if where else ""}
+            FROM scoped
             """,
             _params(activity_params),
         )
@@ -1018,6 +1081,11 @@ class AnalyticsEngine:
 
         rows = self.duck_repo.query_dicts(
             f"""
+            WITH scoped AS (
+                SELECT * FROM {MASTER_DATASET_TABLE}
+                {where}
+                {persona_clause}
+            )
             SELECT persona, partner,
                    COUNT(*) AS total,
                    SUM(CASE WHEN persona_know_more THEN 1 ELSE 0 END) AS know_more,
@@ -1031,9 +1099,7 @@ class AnalyticsEngine:
                    SUM(CASE WHEN offer_letter THEN 1 ELSE 0 END) AS offer_letter,
                    SUM(CASE WHEN fee_paid THEN 1 ELSE 0 END) AS fee_paid,
                    SUM(CASE WHEN funnel_stage = 'Lead' AND NOT connected THEN 1 ELSE 0 END) AS drop_off
-            FROM {MASTER_DATASET_TABLE}
-            {where}
-            {persona_clause}
+            FROM scoped
             GROUP BY persona, partner
             ORDER BY total DESC
             LIMIT 100
@@ -1054,15 +1120,14 @@ class AnalyticsEngine:
             """,
             list(params),
         )
-        # Partner Last 24h donut = activity-report Know More about B.Tech (excl. Kollege).
+        # Partner Last 24h donut = Know More about B.Tech activities (incl. Kollege).
         partner_last_24h = self.duck_repo.query_dicts(
             f"""
             SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Unknown') AS partner,
                    COUNT(*) AS leads
             FROM {MASTER_DATASET_TABLE}
             {where}
-            {persona_clause}
-            AND {interested_last_24h}
+            {"AND" if where else "WHERE"} {interested_last_24h}
             GROUP BY 1
             ORDER BY leads DESC
             LIMIT 12
@@ -1171,10 +1236,10 @@ class AnalyticsEngine:
                     "created_last_24h": created_count,
                     "interested_btech_activity": interested_count,
                     "definition": (
-                        "Created = main-dataset leads created in the last 48 hours "
-                        "(excl. Kollege Apply; UI label remains Last 24h). Interested = "
-                        "Know More about B.Tech leads matched from the persona activity "
-                        "report (excl. Kollege Apply)."
+                        "Created = main-dataset leads created in the last 24 hours "
+                        "(including Kollege Apply). Interested = distinct leads matched to "
+                        "Know More about B.Tech activity events in the last 24 hours "
+                        "(including Kollege Apply)."
                     ),
                 }
             },
@@ -1201,7 +1266,7 @@ class AnalyticsEngine:
                 ),
                 "partner_last_24h": _partner_chart(
                     "persona_partner_last_24h",
-                    "Partners — Activity Know More about B.Tech",
+                    "Partners — Know More about B.Tech (Last 24h)",
                     partner_last_24h,
                     chart_type="pie",
                 ),
@@ -1829,6 +1894,141 @@ class AnalyticsEngine:
     def _is_counsellor_payment_source(value: Any) -> bool:
         return "counsell" in str(value or "").lower()
 
+    def _matched_block_payment_cte(self, where: str, block_clause: str) -> str:
+        """Shared CTE: block-paid master rows matched to payment sheet by email then phone."""
+        return f"""
+            WITH paid AS (
+                SELECT
+                    prospect_id,
+                    name,
+                    email,
+                    phone,
+                    partner,
+                    source AS contact_source,
+                    LOWER(TRIM(COALESCE(email, ''))) AS norm_email,
+                    regexp_replace(COALESCE(CAST(phone AS VARCHAR), ''), '[^0-9]', '', 'g') AS norm_phone
+                FROM {MASTER_DATASET_TABLE}
+                {where}
+                {block_clause}
+            ),
+            email_match AS (
+                SELECT
+                    p.prospect_id,
+                    s.source_at_payment,
+                    s.campaign_at_payment,
+                    s.college_code,
+                    s.full_name AS sheet_name,
+                    s.email AS sheet_email,
+                    s.phone AS sheet_phone,
+                    'email' AS match_method
+                FROM paid p
+                INNER JOIN {BLOCK_PAYMENT_TABLE} s
+                    ON p.norm_email = s.match_email
+                WHERE p.norm_email <> '' AND s.match_email IS NOT NULL
+            ),
+            phone_match AS (
+                SELECT
+                    p.prospect_id,
+                    s.source_at_payment,
+                    s.campaign_at_payment,
+                    s.college_code,
+                    s.full_name AS sheet_name,
+                    s.email AS sheet_email,
+                    s.phone AS sheet_phone,
+                    'phone' AS match_method
+                FROM paid p
+                INNER JOIN {BLOCK_PAYMENT_TABLE} s
+                    ON p.norm_phone = s.match_phone
+                WHERE p.prospect_id NOT IN (SELECT prospect_id FROM email_match)
+                  AND p.norm_phone <> ''
+                  AND LENGTH(p.norm_phone) >= 10
+                  AND s.match_phone IS NOT NULL
+            ),
+            matches AS (
+                SELECT * FROM email_match
+                UNION ALL
+                SELECT * FROM phone_match
+            )
+        """
+
+    def _counsellor_clash_counts_by_partner(
+        self, filters: FilterParams, partner: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Lightweight partner → counsellor clash counts (no row materialization)."""
+        if not self.duck_repo.block_payment_exists() or not self._has_data():
+            return []
+        where, params = self._build_where(filters)
+        block_clause = f"{'AND' if where else 'WHERE'} block_amount_paid"
+        counsellor = self._counsellor_payment_expr("m.source_at_payment")
+        partner_filter = ""
+        if partner:
+            partner_filter = "AND p.partner = ?"
+            params = list(params) + [partner]
+        cte = self._matched_block_payment_cte(where, block_clause)
+        rows = self.duck_repo.query_dicts(
+            f"""
+            {cte}
+            SELECT p.partner AS partner, COUNT(*) AS count
+            FROM paid p
+            INNER JOIN matches m ON p.prospect_id = m.prospect_id
+            WHERE p.partner IS NOT NULL
+              AND {counsellor}
+              {partner_filter}
+            GROUP BY p.partner
+            ORDER BY count DESC
+            """,
+            params,
+        )
+        return [
+            {"partner": str(r["partner"]), "count": int(r["count"] or 0)}
+            for r in rows
+            if r.get("partner")
+        ]
+
+    def _counsellor_clash_rows(
+        self, filters: FilterParams, partner: Optional[str] = None, limit: int = 2000
+    ) -> List[Dict[str, Any]]:
+        """Only matched counsellor-clash leads (for Partner clash table)."""
+        if not self.duck_repo.block_payment_exists() or not self._has_data():
+            return []
+        where, params = self._build_where(filters)
+        block_clause = f"{'AND' if where else 'WHERE'} block_amount_paid"
+        counsellor = self._counsellor_payment_expr("m.source_at_payment")
+        partner_filter = ""
+        query_params = list(params)
+        if partner:
+            partner_filter = "AND p.partner = ?"
+            query_params.append(partner)
+        query_params.append(limit)
+        cte = self._matched_block_payment_cte(where, block_clause)
+        rows = self.duck_repo.query_dicts(
+            f"""
+            {cte}
+            SELECT
+                p.prospect_id,
+                p.partner,
+                COALESCE(NULLIF(TRIM(p.name), ''), m.sheet_name) AS name,
+                COALESCE(NULLIF(TRIM(p.email), ''), m.sheet_email) AS email,
+                COALESCE(NULLIF(TRIM(CAST(p.phone AS VARCHAR)), ''), m.sheet_phone) AS phone,
+                p.contact_source,
+                m.source_at_payment,
+                m.campaign_at_payment,
+                m.college_code AS campus,
+                'matched' AS match_status,
+                m.match_method,
+                TRUE AS is_clash
+            FROM paid p
+            INNER JOIN matches m ON p.prospect_id = m.prospect_id
+            WHERE p.partner IS NOT NULL
+              AND {counsellor}
+              {partner_filter}
+            ORDER BY p.prospect_id
+            LIMIT ?
+            """,
+            query_params,
+        )
+        return rows
+
     def _build_block_payment_clashes(
         self, rows: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
@@ -1856,33 +2056,23 @@ class AnalyticsEngine:
     def _get_partner_counsellor_clashes(
         self, filters: FilterParams, partner: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Derive counsellor clashes from block payment backtracking reconciliation."""
+        """Counsellor clashes from payment-sheet match (aggregate + clash rows only)."""
         empty = {
             "has_sheet": False,
             "total_clashes": 0,
             "by_partner": [],
             "rows": [],
         }
-        backtracking = self.get_block_payment_backtracking(filters)
-        if not backtracking.get("has_sheet"):
+        if not self.duck_repo.block_payment_exists():
             return empty
 
-        rows = list(backtracking.get("clash_rows") or [])
-        if partner:
-            rows = [r for r in rows if str(r.get("partner") or "") == partner]
-
-        by_partner: Dict[str, int] = {}
-        for r in rows:
-            p_name = str(r.get("partner") or "Unknown")
-            by_partner[p_name] = by_partner.get(p_name, 0) + 1
-
+        by_partner = self._counsellor_clash_counts_by_partner(filters, partner=partner)
+        rows = self._counsellor_clash_rows(filters, partner=partner)
+        total = sum(int(item["count"]) for item in by_partner)
         return {
             "has_sheet": True,
-            "total_clashes": len(rows),
-            "by_partner": [
-                {"partner": p, "count": c}
-                for p, c in sorted(by_partner.items(), key=lambda x: x[1], reverse=True)
-            ],
+            "total_clashes": total,
+            "by_partner": by_partner,
             "rows": rows,
         }
 
@@ -2120,6 +2310,78 @@ class AnalyticsEngine:
             categories=[r["month"] for r in rows],
             series=[ChartSeries(name="Contactability %", data=rates)],
         )
+
+    def get_metric_trends(self, filters: FilterParams) -> Dict[str, ChartData]:
+        """Monthly trends for Overview selectable chart (leads / test / persona / block)."""
+        where, params = self._build_where(filters)
+        available = set(self.duck_repo.get_master_columns())
+        btech_persona = (
+            "REPLACE(LOWER(REPLACE(TRIM(COALESCE(persona, '')), '.', '')), ' ', '') "
+            "= 'knowmoreaboutbtech'"
+        )
+        test_expr = (
+            "SUM(CASE WHEN test_registration THEN 1 ELSE 0 END)"
+            if "test_registration" in available
+            else "0"
+        )
+        block_expr = (
+            "SUM(CASE WHEN block_amount_paid THEN 1 ELSE 0 END)"
+            if "block_amount_paid" in available
+            else "0"
+        )
+        persona_expr = (
+            f"SUM(CASE WHEN {btech_persona} THEN 1 ELSE 0 END)"
+            if "persona" in available
+            else "0"
+        )
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT month AS period,
+                   COUNT(*) AS leads,
+                   {test_expr} AS test_takers,
+                   {persona_expr} AS know_more_btech,
+                   {block_expr} AS block_amount
+            FROM {MASTER_DATASET_TABLE}
+            {where}
+            GROUP BY month
+            ORDER BY period
+            """,
+            params,
+        )
+        categories = [str(r["period"]) for r in rows]
+
+        def _line(chart_id: str, title: str, series_name: str, key: str) -> ChartData:
+            return ChartData(
+                chart_id=chart_id,
+                chart_type="line",
+                title=title,
+                categories=categories,
+                series=[
+                    ChartSeries(
+                        name=series_name,
+                        data=[int(r.get(key) or 0) for r in rows],
+                    )
+                ],
+            )
+
+        return {
+            "leads_trend": _line("leads_trend", "Leads Trend", "Leads", "leads"),
+            "test_taker_trend": _line(
+                "test_taker_trend", "Test Taker Trend", "Test Takers", "test_takers"
+            ),
+            "persona_know_more_trend": _line(
+                "persona_know_more_trend",
+                "Know More about B.Tech Trend",
+                "Know More about B.Tech",
+                "know_more_btech",
+            ),
+            "block_amount_trend": _line(
+                "block_amount_trend",
+                "Block Amount Trend",
+                "Block Amount Paid",
+                "block_amount",
+            ),
+        }
 
     def export_data(self, filters: FilterParams, limit: int = 100000) -> List[Dict[str, Any]]:
         where, params = self._build_where(filters)

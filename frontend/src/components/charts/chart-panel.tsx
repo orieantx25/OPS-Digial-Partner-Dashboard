@@ -35,7 +35,28 @@ function gridLeftForChart(series: ChartData['series']): number {
   return Math.max(68, Math.ceil(label.length * 7.5) + 16);
 }
 
-function chartGrid(series: ChartData['series'], overrides: Record<string, unknown> = {}) {
+function chartGrid(
+  series: ChartData['series'],
+  overrides: Record<string, unknown> = {},
+  chartExtra?: ChartData['extra']
+) {
+  const fromExtra =
+    chartExtra && typeof chartExtra.grid === 'object' && chartExtra.grid !== null
+      ? (chartExtra.grid as Record<string, unknown>)
+      : {};
+
+  if (chartExtra?.compact_grid) {
+    return {
+      top: 28,
+      bottom: 22,
+      right: 20,
+      ...overrides,
+      ...fromExtra,
+      left: fromExtra.left ?? 2,
+      containLabel: true,
+    };
+  }
+
   return {
     left: gridLeftForChart(series),
     right: 16,
@@ -43,6 +64,7 @@ function chartGrid(series: ChartData['series'], overrides: Record<string, unknow
     bottom: 32,
     containLabel: false,
     ...overrides,
+    ...fromExtra,
   };
 }
 
@@ -179,7 +201,7 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
     // Title is rendered by the panel header — keep ECharts title hidden to avoid duplicates.
     title: { show: false, text: '' },
     tooltip: axisTooltip(),
-    grid: chartGrid(chart.series),
+    grid: chartGrid(chart.series, {}, chart.extra),
     toolbox: {
       right: 4,
       top: 0,
@@ -204,7 +226,90 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
       }
       return {
         ...base,
-        grid: chartGrid(chart.series, { top: multi ? 56 : 44 }),
+        grid: chartGrid(chart.series, { top: multi ? 56 : 44 }, chart.extra),
+        tooltip: forecastStyle
+          ? {
+              trigger: 'axis' as const,
+              backgroundColor: '#202124',
+              borderColor: '#3A3A3A',
+              formatter: (params: unknown) => {
+                const items = Array.isArray(params) ? params : [params];
+                if (!items.length) return '';
+                const axis =
+                  String(
+                    (items[0] as { axisValueLabel?: string; axisValue?: string })
+                      .axisValueLabel ??
+                      (items[0] as { axisValue?: string }).axisValue ??
+                      ''
+                  );
+                const byName = new Map<string, number | null>();
+                for (const raw of items) {
+                  const p = raw as {
+                    seriesName?: string;
+                    value?: number | null;
+                    data?: number | null;
+                  };
+                  const name = String(p.seriesName || '');
+                  const v = p.value ?? p.data;
+                  byName.set(
+                    name,
+                    v == null || Number.isNaN(Number(v)) ? null : Number(v)
+                  );
+                }
+
+                const currentEntry = [...byName.entries()].find(([n]) =>
+                  n.toLowerCase().startsWith('current')
+                );
+                const expectedEntry = [...byName.entries()].find(([n]) =>
+                  n.toLowerCase().startsWith('expected')
+                );
+                const currentVal = currentEntry?.[1] ?? null;
+                const expectedVal = expectedEntry?.[1] ?? null;
+
+                // Baseline for +projected: this month's current, else last known current.
+                let baseline = currentVal;
+                if (baseline == null && expectedVal != null) {
+                  const currentSeries = chart.series.find((s) =>
+                    s.name.toLowerCase().startsWith('current')
+                  );
+                  const idx = chart.categories.indexOf(axis);
+                  if (currentSeries && idx >= 0) {
+                    for (let i = idx - 1; i >= 0; i -= 1) {
+                      const prev = currentSeries.data[i];
+                      if (prev != null && !Number.isNaN(Number(prev))) {
+                        baseline = Number(prev);
+                        break;
+                      }
+                    }
+                  }
+                }
+
+                const lines = [`<div style="margin-bottom:4px">${axis}</div>`];
+                if (currentVal != null) {
+                  lines.push(
+                    `<div>Current: <b>${formatNumber(currentVal)}</b></div>`
+                  );
+                } else if (baseline != null && expectedVal != null) {
+                  lines.push(
+                    `<div>Current: <b>${formatNumber(baseline)}</b></div>`
+                  );
+                }
+
+                if (expectedVal != null) {
+                  const delta =
+                    baseline != null ? expectedVal - baseline : expectedVal;
+                  const sign = delta > 0 ? '+' : delta < 0 ? '' : '+';
+                  lines.push(
+                    `<div>Projected: <b>${sign}${formatNumber(delta)}</b></div>`
+                  );
+                } else if (currentVal == null && baseline == null) {
+                  return '';
+                }
+
+                return lines.join('');
+              },
+            }
+          : base.tooltip,
         legend: multi
           ? {
               top: 4,
@@ -491,7 +596,7 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
             name: c,
             value: chart.series[0]?.data[i],
           })),
-          itemStyle: { borderColor: '#0F0F10', borderWidth: 2 },
+          itemStyle: { borderWidth: 0 },
           label: {
             color: '#D5D5D5',
             fontSize: 11,
@@ -640,15 +745,22 @@ export function ChartPanel({ chart, height = 280, className }: ChartPanelProps) 
     <div className={`panel p-3 ${className || ''}`}>
       {!hasData ? (
         <div style={{ height }} className="flex flex-col">
-          <div className="text-sm font-semibold text-text mb-2">{chart.title}</div>
+          {chart.title ? (
+            <div className="text-sm font-semibold text-text mb-2">{chart.title}</div>
+          ) : null}
           <div className="flex-1 flex items-center justify-center text-text-secondary text-sm border border-border border-dashed">
             No data available
           </div>
         </div>
       ) : (
         <>
+          {(chart.title || mixedScale) && (
           <div className="flex items-start justify-between gap-2 mb-2">
-            <div className="text-sm font-semibold text-text shrink-0">{chart.title}</div>
+            {chart.title ? (
+              <div className="text-sm font-semibold text-text shrink-0">{chart.title}</div>
+            ) : (
+              <div />
+            )}
             {mixedScale && (
               <div className="flex flex-wrap gap-1 justify-end">
                 {chart.series.map((s, i) => (
@@ -675,6 +787,7 @@ export function ChartPanel({ chart, height = 280, className }: ChartPanelProps) 
               </div>
             )}
           </div>
+          )}
           {mixedScale && (
             <p className="text-[10px] text-text-secondary mb-2 -mt-1">
               Select a metric to scale the chart — other lines stay visible for context.

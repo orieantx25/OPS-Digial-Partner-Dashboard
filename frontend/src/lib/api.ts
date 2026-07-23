@@ -221,6 +221,31 @@ export const api = {
   getUploadHistory: () =>
     request<Record<string, unknown>[]>('/upload/history'),
 
+  getLsqSyncConfig: () =>
+    request<{ enabled: boolean; api_host: string; requires_token: boolean }>('/sync/config'),
+
+  getLsqSyncLastRun: () =>
+    request<{
+      status: string;
+      mode?: string;
+      started_at?: string;
+      completed_at?: string;
+      leads_synced?: number;
+      activities_synced?: number;
+      master_total_rows?: number;
+      message?: string;
+      error?: string;
+    }>('/sync/last-run'),
+
+  startLsqSync: (mode: 'incremental' | 'full' = 'incremental', fromDate?: string) =>
+    request<{ job_id: string; status: string; mode: string }>('/sync/leadsquared', {
+      method: 'POST',
+      body: JSON.stringify({ mode, from_date: fromDate ?? null }),
+    }),
+
+  getLsqSyncStatus: (jobId: string) =>
+    request<UploadJob>(`/sync/status/${jobId}`, { signal: AbortSignal.timeout(15000) }),
+
   exportCsv: (filters: FilterParams) =>
     request<string>(`/analytics/export${buildQuery({ ...filtersToQuery(filters), format: 'csv' })}`),
 };

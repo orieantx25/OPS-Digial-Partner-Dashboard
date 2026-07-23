@@ -61,6 +61,22 @@ class SnapshotRecord(Base):
     metadata_json: Mapped[Optional[str]] = mapped_column(JSON, nullable=True)
 
 
+class LsqSyncRunRecord(Base):
+    __tablename__ = "lsq_sync_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    mode: Mapped[str] = mapped_column(String(32), default="incremental")
+    started_at: Mapped[datetime] = mapped_column(DateTime)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    leads_synced: Mapped[int] = mapped_column(Integer, default=0)
+    activities_synced: Mapped[int] = mapped_column(Integer, default=0)
+    master_total_rows: Mapped[int] = mapped_column(Integer, default=0)
+    watermark_to: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    message: Mapped[str] = mapped_column(String(1024), default="")
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
 _engine = None
 _SessionLocal = None
 

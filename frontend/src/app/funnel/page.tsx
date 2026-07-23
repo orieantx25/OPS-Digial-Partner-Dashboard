@@ -5,11 +5,12 @@ import { api } from '@/lib/api';
 import { useFetch } from '@/hooks/use-fetch';
 import { useEffectiveFilters } from '@/store/app-store';
 import { ChartPanel } from '@/components/charts/chart-panel';
+import { FetchingHint } from '@/components/dashboard/fetching-hint';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { EMPTY_EXECUTIVE_CHARTS } from '@/lib/empty-defaults';
 import { KPI_LEAD_FILTERS } from '@/lib/lead-filters';
 import { useLeadExplorerStore } from '@/store/lead-explorer-store';
-import { formatNumber, formatPct } from '@/lib/utils';
+import { cn, formatNumber, formatPct } from '@/lib/utils';
 
 const CONNECTED_SPLIT_ROWS: { key: 'ai_connected' | 'ac_connected'; label: string }[] = [
   { key: 'ai_connected', label: 'AI Connected' },
@@ -20,7 +21,7 @@ export default function FunnelPage() {
   const filters = useEffectiveFilters();
   const openExplorer = useLeadExplorerStore((s) => s.openExplorer);
 
-  const { data: funnel, loading } = useFetch({
+  const { data: funnel, loading, isFetching } = useFetch({
     fetcher: () => api.getFunnel(filters),
     deps: [JSON.stringify(filters)],
   });
@@ -34,9 +35,12 @@ export default function FunnelPage() {
   }) || { ai_connected: 0, ac_connected: 0 };
 
   return (
-    <div className="space-y-4">
+    <div className={cn('space-y-4', isFetching && funnel && 'opacity-90')}>
       <PageHeader title="Lead Funnel" />
-      {loading ? <p className="text-text-secondary text-sm">Loading...</p> : (
+      <FetchingHint active={isFetching} />
+      {loading && !funnel ? (
+        <p className="text-text-secondary text-sm">Loading...</p>
+      ) : (
         <>
           <ChartPanel chart={displayFunnel} height={400} />
           <SectionHeader title="Stage Breakdown" />

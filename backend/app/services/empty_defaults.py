@@ -65,6 +65,12 @@ def empty_executive_charts() -> Dict[str, ChartData]:
         "funnel": empty_funnel(),
         "heatmap": ChartData(chart_id="heatmap", chart_type="heatmap", title="Lead Activity Heatmap", extra={"data": []}),
         "contactability_trend": empty_chart("contactability_trend", "line", "Contactability Trend"),
+        "leads_trend": empty_chart("leads_trend", "line", "Leads Trend"),
+        "test_taker_trend": empty_chart("test_taker_trend", "line", "Test Taker Trend"),
+        "persona_know_more_trend": empty_chart(
+            "persona_know_more_trend", "line", "Know More about B.Tech Trend"
+        ),
+        "block_amount_trend": empty_chart("block_amount_trend", "line", "Block Amount Trend"),
     }
 
 

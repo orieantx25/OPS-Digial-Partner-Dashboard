@@ -47,4 +47,12 @@ export const EMPTY_EXECUTIVE_CHARTS: Record<string, ChartData> = {
   },
   heatmap: { chart_id: 'heatmap', chart_type: 'heatmap', title: 'Lead Activity Heatmap', categories: [], series: [], extra: { data: [] } },
   contactability_trend: emptyChart('contactability_trend', 'line', 'Contactability Trend'),
+  leads_trend: emptyChart('leads_trend', 'line', 'Leads Trend'),
+  test_taker_trend: emptyChart('test_taker_trend', 'line', 'Test Taker Trend'),
+  persona_know_more_trend: emptyChart(
+    'persona_know_more_trend',
+    'line',
+    'Know More about B.Tech Trend'
+  ),
+  block_amount_trend: emptyChart('block_amount_trend', 'line', 'Block Amount Trend'),
 };

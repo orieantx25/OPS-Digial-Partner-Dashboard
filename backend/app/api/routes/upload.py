@@ -4,10 +4,9 @@ import threading
 import uuid
 from typing import List, Tuple
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
-from app.api.dependencies import require_write_access
-from app.domain.models import UploadReport, UserInfo
+from app.domain.models import UploadReport
 from app.infrastructure.database import UploadBatchRecord, get_session_factory
 from app.logging_config import get_logger
 from app.services.ingestion_service import IngestionEngine
@@ -96,7 +95,6 @@ def _run_upload_job(
 async def upload_files(
     files: List[UploadFile] = File(...),
     replace: bool = Form(True),
-    user: UserInfo = Depends(require_write_access),
 ):
     if not files:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No files provided")
@@ -114,13 +112,13 @@ async def upload_files(
     job_id = str(uuid.uuid4())
     job_store.create(job_id)
     logger.info(
-        "upload_started", job_id=job_id, user=user.username,
+        "upload_started", job_id=job_id, user="anonymous",
         file_count=len(file_tuples), replace=replace,
     )
 
     thread = threading.Thread(
         target=_run_upload_job,
-        args=(job_id, file_tuples, replace, user.username),
+        args=(job_id, file_tuples, replace, "anonymous"),
         daemon=True,
     )
     thread.start()

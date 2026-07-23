@@ -4,15 +4,15 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { ColumnDef } from '@tanstack/react-table';
 import { AlertCircle, CheckCircle, Loader2, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
+import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { useFetch } from '@/hooks/use-fetch';
 import { DataTable } from '@/components/tables/data-table';
 import { IndiaMap } from '@/components/charts/india-map';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { BlockPaymentTrackingRow } from '@/types';
 import { cn, formatNumber } from '@/lib/utils';
-import { canUpload, loginUser } from '@/hooks/use-auth-bootstrap';
 
-type UploadStep = 'idle' | 'uploading' | 'done' | 'error' | 'login';
+type UploadStep = 'idle' | 'uploading' | 'done' | 'error';
 
 function formatMatchStatus(status: string): string {
   if (status === 'matched') return 'Matched';
@@ -33,10 +33,6 @@ export default function BlockPaymentPage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [username, setUsername] = useState('ops');
-  const [password, setPassword] = useState('ops123');
-  const [loginLoading, setLoginLoading] = useState(false);
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [sheetRefresh, setSheetRefresh] = useState(0);
 
@@ -62,15 +58,8 @@ export default function BlockPaymentPage() {
       refetchStatus();
       refetchBacktracking();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Upload failed';
-      if (msg.toLowerCase().includes('write access') || msg.includes('403')) {
-        setPendingFile(file);
-        setUploadStep('login');
-        setUploadError('Sign in with an Operations or Admin account to upload.');
-      } else {
-        setUploadError(msg);
-        setUploadStep('error');
-      }
+      setUploadError(e instanceof Error ? e.message : 'Upload failed');
+      setUploadStep('error');
     }
   }, [refetchBacktracking, refetchStatus]);
 
@@ -84,30 +73,7 @@ export default function BlockPaymentPage() {
       setUploadStep('error');
       return;
     }
-    if (!canUpload()) {
-      setPendingFile(file);
-      setUploadStep('login');
-      return;
-    }
     uploadFile(file);
-  };
-
-  const handleLogin = async () => {
-    setLoginLoading(true);
-    setUploadError(null);
-    const ok = await loginUser(username, password);
-    setLoginLoading(false);
-    if (!ok) {
-      setUploadError('Invalid username or password');
-      return;
-    }
-    if (pendingFile) {
-      const file = pendingFile;
-      setPendingFile(null);
-      uploadFile(file);
-    } else {
-      setUploadStep('idle');
-    }
   };
 
   const columns: ColumnDef<BlockPaymentTrackingRow>[] = useMemo(
@@ -168,6 +134,7 @@ export default function BlockPaymentPage() {
   const unmatchedCount = backtracking?.unmatched_count ?? 0;
   const clashCount = backtracking?.clash_count ?? 0;
   const totalBlockPaid = backtracking?.total_block_paid ?? 0;
+  const uploadsEnabled = canUpload();
 
   return (
     <div className="space-y-4">
@@ -176,7 +143,10 @@ export default function BlockPaymentPage() {
         totalRows={totalBlockPaid > 0 ? totalBlockPaid : undefined}
       />
 
-      <SectionHeader title="Block Amount Paid Sheet" />
+      <SectionHeader
+        title="Block Amount Paid Sheet"
+        subtitle={uploadsEnabled ? undefined : 'View-only — sheet is refreshed by an admin'}
+      />
 
       <div className="panel p-4 space-y-3">
         {sheetStatus?.has_data && (
@@ -198,41 +168,14 @@ export default function BlockPaymentPage() {
           </div>
         )}
 
-        {uploadStep === 'login' && (
-          <div className="space-y-3 max-w-sm">
-            <p className="text-xs text-amber-400">{uploadError}</p>
-            <input
-              className="input w-full text-sm"
-              placeholder="Username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-            />
-            <input
-              className="input w-full text-sm"
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <div className="flex gap-2">
-              <button type="button" className="btn-primary text-sm" onClick={handleLogin} disabled={loginLoading}>
-                {loginLoading ? 'Signing in…' : 'Sign in & upload'}
-              </button>
-              <button type="button" className="btn-secondary text-sm" onClick={() => setUploadStep('idle')}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-
-        {uploadStep === 'uploading' && (
+        {uploadsEnabled && uploadStep === 'uploading' && (
           <div className="flex items-center gap-2 text-sm text-text-secondary py-6 justify-center">
             <Loader2 className="w-4 h-4 animate-spin" />
             Uploading block amount paid sheet…
           </div>
         )}
 
-        {(uploadStep === 'done' || uploadStep === 'error') && (
+        {uploadsEnabled && (uploadStep === 'done' || uploadStep === 'error') && (
           <div
             className={cn(
               'flex items-start gap-2 text-sm p-3 border',
@@ -263,7 +206,7 @@ export default function BlockPaymentPage() {
           </div>
         )}
 
-        {uploadStep === 'idle' && (
+        {uploadsEnabled && uploadStep === 'idle' && (
           <div
             className={cn(
               'border border-dashed rounded-sm p-8 text-center transition-colors cursor-pointer',
@@ -302,6 +245,12 @@ export default function BlockPaymentPage() {
               }}
             />
           </div>
+        )}
+
+        {!uploadsEnabled && !sheetStatus?.has_data && (
+          <p className="text-sm text-text-secondary">
+            No block payment sheet loaded yet. An admin must upload it from the local app.
+          </p>
         )}
       </div>
 
@@ -353,8 +302,9 @@ export default function BlockPaymentPage() {
         <p className="text-text-secondary text-sm">Loading reconciliation…</p>
       ) : !sheetStatus?.has_data ? (
         <p className="text-text-secondary text-sm panel p-4">
-          Upload a block amount paid sheet above to reconcile payment source, campaign, and campus
-          against block-paid leads in the main dataset.
+          {uploadsEnabled
+            ? 'Upload a block amount paid sheet above to reconcile payment source, campaign, and campus against block-paid leads in the main dataset.'
+            : 'Reconciliation will appear once an admin uploads a block amount paid sheet.'}
         </p>
       ) : (
         <DataTable

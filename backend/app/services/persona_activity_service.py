@@ -23,6 +23,24 @@ from app.services.block_payment_service import normalize_match_email
 logger = get_logger(__name__)
 
 
+def normalize_know_more_event_key(value: Any) -> str:
+    """Normalize activity/persona text for Know More about B.Tech matching."""
+    if value is None:
+        return ""
+    return (
+        str(value)
+        .strip()
+        .lower()
+        .replace(".", "")
+        .replace(" ", "")
+    )
+
+
+def is_know_more_about_btech_event(notes: Any) -> bool:
+    """True when activity EventName/notes is Know More about B.Tech."""
+    return normalize_know_more_event_key(notes) == "knowmoreaboutbtech"
+
+
 def normalize_persona_activity_header(header: str) -> str:
     cleaned = re.sub(r"\s+", " ", str(header).strip().lower())
     if cleaned in PERSONA_ACTIVITY_COLUMN_ALIASES:
@@ -154,6 +172,54 @@ class PersonaActivityService:
             )
             .select(PERSONA_ACTIVITY_COLUMNS)
         )
+
+    def write_dataframe(
+        self, frame: pl.DataFrame, source_label: str = "leadsquared_sync"
+    ) -> Dict[str, Any]:
+        """Persist a normalized persona activity frame (replaces prior upload)."""
+        if frame is None:
+            return {"row_count": 0, "message": "No persona activity rows to write"}
+
+        uploaded_at = datetime.utcnow().isoformat()
+        for col in PERSONA_ACTIVITY_COLUMNS:
+            if col not in frame.columns:
+                frame = frame.with_columns(pl.lit(None).cast(pl.Utf8).alias(col))
+            else:
+                frame = frame.with_columns(pl.col(col).cast(pl.Utf8, strict=False).alias(col))
+
+        email_col = (
+            pl.col("email") if "email" in frame.columns else pl.lit(None).cast(pl.Utf8)
+        )
+        frame = (
+            frame.with_columns(
+                email_col.map_elements(normalize_match_email, return_dtype=pl.Utf8).alias(
+                    "match_email"
+                ),
+                pl.lit(uploaded_at).alias("uploaded_at"),
+                pl.lit(source_label).alias("source_filename"),
+            )
+            .select(PERSONA_ACTIVITY_COLUMNS)
+        )
+
+        row_count = frame.height
+        tmp_path = self.parquet_path.with_suffix(".tmp.parquet")
+        frame.write_parquet(tmp_path)
+        tmp_path.replace(self.parquet_path)
+
+        meta = {
+            "uploaded_at": uploaded_at,
+            "source_filename": source_label,
+            "row_count": row_count,
+            "source": "leadsquared",
+        }
+        self.meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        logger.info("persona_activity_synced", rows=row_count, source=source_label)
+        return {
+            "row_count": row_count,
+            "source_filename": source_label,
+            "uploaded_at": uploaded_at,
+            "message": f"Synced {row_count} persona activity rows from LeadSquared",
+        }
 
     def upload_sheet(self, filename: str, content: bytes) -> Dict[str, Any]:
         if not content:

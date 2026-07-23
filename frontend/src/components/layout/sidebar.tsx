@@ -7,6 +7,7 @@ import {
   LayoutDashboard, Filter, Users, Phone, Bot, UserCircle,
   Megaphone, MapPin, IndianRupee, TrendingUp, Upload, Receipt,
 } from 'lucide-react';
+import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { cn } from '@/lib/utils';
 import { DASHBOARD_PAGES } from '@/types';
 import { useAppStore } from '@/store/app-store';
@@ -70,14 +71,16 @@ export function Sidebar() {
         })}
       </nav>
       <div className="p-3 border-t border-border space-y-2">
-        <button
-          type="button"
-          onClick={openUpload}
-          className="btn-primary w-full flex items-center justify-center gap-2 text-sm"
-        >
-          <Upload className="w-4 h-4" />
-          Upload Data
-        </button>
+        {canUpload() && (
+          <button
+            type="button"
+            onClick={openUpload}
+            className="btn-primary w-full flex items-center justify-center gap-2 text-sm"
+          >
+            <Upload className="w-4 h-4" />
+            Upload Data
+          </button>
+        )}
         {user && (
           <div className="px-1 text-xs text-text-secondary">
             <div className="text-text">{user.username}</div>

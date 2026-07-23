@@ -22,6 +22,7 @@ from app.domain.schema import (
     ALL_COLUMNS,
     BOOLEAN_COLUMNS,
     COLUMN_ALIASES,
+    PARTNER_CANONICAL,
     canonical_partner,
     date_header_priority,
     derive_campaign,
@@ -37,6 +38,7 @@ from app.domain.schema import (
     OPTIONAL_COLUMNS,
     REQUIRED_COLUMNS,
     stage_rank,
+    stage_to_funnel,
 )
 from app.infrastructure.duckdb_repo import AnalyticsCache, DuckDBRepository
 from app.logging_config import get_logger
@@ -894,6 +896,10 @@ class IngestionEngine:
 
         df = self._add_derived_columns(df, filename, batch_id)
 
+        # Dashboard scope: only the five digital partners (drop Unknown / other).
+        if "partner" in df.columns:
+            df = df.filter(pl.col("partner").cast(pl.Utf8).is_in(list(PARTNER_CANONICAL)))
+
         select_cols = [c for c in ALL_COLUMNS if c in df.columns]
         return df.select(select_cols)
 
@@ -931,6 +937,7 @@ class IngestionEngine:
             ])
 
         df = self._derive_funnel(df)
+        df = self._apply_block_amount_from_contact_stage(df)
 
         df = self._derive_ai_from_contact_stage(df)
 
@@ -1033,6 +1040,8 @@ class IngestionEngine:
         return df
 
     # Boolean flags that participate in the funnel, mapped to their rank.
+    # block_amount_paid is derived only from contact_stage (see
+    # _apply_block_amount_from_contact_stage) — not from LSQ/Excel bools or lead_stage.
     _FUNNEL_BOOL_RANK: Dict[str, int] = {
         "connected": FUNNEL_STAGE_RANK["Connected"],
         "mql": FUNNEL_STAGE_RANK["MQL"],
@@ -1048,7 +1057,12 @@ class IngestionEngine:
     def _derive_funnel(self, df: pl.DataFrame) -> pl.DataFrame:
         """Derive funnel_stage and cumulative stage flags from the furthest stage
         a prospect reached, considering the text lead/contact stages AND any
-        pre-existing boolean flags. A prospect is always at least a "Lead"."""
+        pre-existing boolean flags (except block_amount_paid). A prospect is
+        always at least a "Lead"."""
+        # Ignore workbook/LSQ block-amount bool so it cannot raise funnel_rank.
+        if "block_amount_paid" in df.columns:
+            df = df.with_columns(pl.lit(False).alias("block_amount_paid"))
+
         rank_exprs = [pl.lit(1, dtype=pl.Int32)]
 
         for col in ("lead_stage", "contact_stage"):
@@ -1063,6 +1077,8 @@ class IngestionEngine:
                     )
 
         for col, rank in self._FUNNEL_BOOL_RANK.items():
+            if col == "block_amount_paid":
+                continue
             if col in df.columns:
                 rank_exprs.append(
                     pl.when(pl.col(col).fill_null(False))
@@ -1075,6 +1091,7 @@ class IngestionEngine:
         df = df.with_columns([
             (pl.col("funnel_rank") >= rank).alias(col)
             for col, rank in self._FUNNEL_BOOL_RANK.items()
+            if col != "block_amount_paid"
         ])
 
         rank_to_stage = {FUNNEL_STAGE_RANK[s]: s for s in FUNNEL_STAGES}
@@ -1085,6 +1102,84 @@ class IngestionEngine:
         )
 
         return df.drop("funnel_rank")
+
+    def _apply_block_amount_from_contact_stage(self, df: pl.DataFrame) -> pl.DataFrame:
+        """block_amount_paid only from Contact Stage exactly = Block Amount Paid.
+
+        Contact Stage comes from LSQ ProspectStage (CRM label). Main Lead Stages
+        are ignored. Admission does not count.
+        """
+        if "contact_stage" not in df.columns:
+            return df.with_columns(pl.lit(False).alias("block_amount_paid"))
+
+        distinct = df.select(pl.col("contact_stage")).unique().to_series().to_list()
+        paid_map = {
+            v: stage_to_funnel(v) == "Block Amount Paid" for v in distinct if v is not None
+        }
+        return df.with_columns(
+            pl.col("contact_stage")
+            .replace_strict(paid_map, default=False, return_dtype=pl.Boolean)
+            .fill_null(False)
+            .alias("block_amount_paid")
+        )
+
+
+    def recompute_block_amount_paid(self) -> Dict[str, Any]:
+        """Rewrite block_amount_paid for every master row from stored contact_stage."""
+        path = self.settings.parquet_dir / MASTER_PARQUET_FILE
+        if not path.exists():
+            return {"updated": False, "row_count": 0, "block_paid_by_partner": {}}
+
+        df = pl.read_parquet(path)
+        if df.height == 0:
+            return {"updated": False, "row_count": 0, "block_paid_by_partner": {}}
+
+        before = (
+            int(df.filter(pl.col("block_amount_paid").fill_null(False)).height)
+            if "block_amount_paid" in df.columns
+            else 0
+        )
+        df = self._apply_block_amount_from_contact_stage(df)
+        after = int(df.filter(pl.col("block_amount_paid").fill_null(False)).height)
+
+        tmp = path.with_suffix(".tmp.parquet")
+        df.write_parquet(tmp)
+        tmp.replace(path)
+        self.duck_repo.invalidate_metadata_cache()
+        self.cache.invalidate_all()
+        try:
+            self.duck_repo.refresh_materialized_aggregates()
+        except Exception as exc:
+            # Live uvicorn may hold analytics.duckdb; parquet flags are still updated.
+            logger.warning("block_amount_recompute_mv_refresh_skipped", error=str(exc))
+            self.duck_repo.invalidate_metadata_cache()
+            self.cache.invalidate_all()
+
+        by_partner: Dict[str, int] = {}
+        if "partner" in df.columns:
+            counts = (
+                df.filter(pl.col("block_amount_paid").fill_null(False))
+                .group_by("partner")
+                .agg(pl.len().alias("n"))
+                .sort("partner")
+            )
+            for row in counts.iter_rows(named=True):
+                by_partner[str(row["partner"])] = int(row["n"])
+
+        logger.info(
+            "block_amount_paid_recomputed",
+            rows=df.height,
+            before=before,
+            after=after,
+            by_partner=by_partner,
+        )
+        return {
+            "updated": True,
+            "row_count": df.height,
+            "block_paid_before": before,
+            "block_paid_after": after,
+            "block_paid_by_partner": by_partner,
+        }
 
     def _append_to_master(self, new_data: pl.DataFrame) -> None:
         """Back-compat wrapper: write a single frame via the batched writer."""
@@ -1211,3 +1306,244 @@ class IngestionEngine:
             .alias("conversion_pct")
         )
         return df.select(ALL_COLUMNS)
+
+    def process_lsq_sync_batch(
+        self,
+        raw_df: pl.DataFrame,
+        batch_id: str,
+        replace: bool = False,
+        progress_cb: Optional[Callable[..., None]] = None,
+    ) -> Dict[str, Any]:
+        """Normalize LeadSquared rows and upsert into MASTER_DATASET."""
+
+        def emit(percent: float, phase: str, rows_processed: int = 0, rows_total: int = 0) -> None:
+            if progress_cb:
+                try:
+                    progress_cb(
+                        percent=round(min(99.0, max(0.0, percent)), 1),
+                        phase=phase,
+                        rows_processed=rows_processed,
+                        rows_total=rows_total,
+                    )
+                except Exception:
+                    pass
+
+        if raw_df is None or raw_df.height == 0:
+            if not replace:
+                emit(75, "Purging non-partner rows")
+                self._upsert_master_batches([], replace=False, purge_non_partners=True)
+                self.duck_repo.refresh_materialized_aggregates()
+                self.cache.invalidate_all()
+            return {
+                "rows_accepted": 0,
+                "rows_rejected": 0,
+                "rows_skipped_non_partner": 0,
+                "message": "No lead rows to sync (purged non-partners from master)",
+            }
+
+        emit(5, "Preparing LeadSquared rows")
+        total = raw_df.height
+        normalized_parts: List[pl.DataFrame] = []
+        done = 0
+        for start in range(0, raw_df.height, NORMALIZE_CHUNK_SIZE):
+            chunk = raw_df.slice(start, NORMALIZE_CHUNK_SIZE)
+            frame = self._normalize_dataframe(chunk, "leadsquared_sync", batch_id)
+            if frame is not None and frame.height > 0:
+                frame = frame.with_columns(self._pid_expr().alias("_npid"))
+                frame = frame.filter(
+                    pl.col("_npid").is_not_null() & (pl.col("_npid") != "")
+                )
+                frame = frame.unique(subset=["_npid"], keep="last", maintain_order=True).drop(
+                    "_npid"
+                )
+                if "date" in frame.columns:
+                    frame = frame.filter(pl.col("date").is_not_null())
+                if frame.height > 0:
+                    normalized_parts.append(frame)
+            done += chunk.height
+            emit(10 + 60 * (done / max(total, 1)), "Normalizing leads", done, total)
+
+        if not normalized_parts:
+            if not replace:
+                emit(75, "Purging non-partner rows")
+                self._upsert_master_batches([], replace=False, purge_non_partners=True)
+                self.duck_repo.refresh_materialized_aggregates()
+                self.cache.invalidate_all()
+            return {
+                "rows_accepted": 0,
+                "rows_rejected": total,
+                "rows_skipped_non_partner": total,
+                "message": (
+                    f"No digital-partner leads from LeadSquared "
+                    f"(skipped {total} non-partner/Unknown)"
+                ),
+            }
+
+        merged = (
+            pl.concat(normalized_parts, how="diagonal_relaxed")
+            if len(normalized_parts) > 1
+            else normalized_parts[0]
+        )
+        # Partner filter already applied in _normalize_dataframe; count skips vs input.
+        accepted_pre_write = merged.height
+        skipped_non_partner = max(0, total - accepted_pre_write)
+
+        emit(75, "Writing MASTER_DATASET")
+        if replace:
+            self.duck_repo.clear_master()
+            self.cache.invalidate_all()
+        self._upsert_master_batches(
+            [merged], replace=replace, purge_non_partners=True
+        )
+        emit(90, "Refreshing analytics")
+        try:
+            self.duck_repo.refresh_materialized_aggregates()
+        except Exception as exc:
+            logger.warning("lsq_sync_mv_refresh_skipped", error=str(exc))
+            self.duck_repo.invalidate_metadata_cache()
+        self.cache.invalidate_all()
+
+        accepted = merged.height
+        skip_note = (
+            f" (skipped {skipped_non_partner} non-partner/Unknown)"
+            if skipped_non_partner
+            else ""
+        )
+        return {
+            "rows_accepted": accepted,
+            "rows_rejected": skipped_non_partner,
+            "rows_skipped_non_partner": skipped_non_partner,
+            "message": f"Synced {accepted} digital-partner leads from LeadSquared{skip_note}",
+        }
+
+    def _upsert_master_batches(
+        self,
+        frames: List[pl.DataFrame],
+        replace: bool = False,
+        purge_non_partners: bool = False,
+    ) -> None:
+        """Replace rows by prospect_id, then stream-write MASTER_DATASET.
+
+        Prefer a DuckDB anti-join written to a temp parquet so we do not load the
+        full master into Python memory; fall back to batched Polars filtering.
+
+        When purge_non_partners=True, existing master rows whose partner is not
+        in PARTNER_CANONICAL are dropped during the rewrite.
+        """
+        frames = [f for f in frames if f is not None and f.height > 0]
+        if replace:
+            if frames:
+                self._write_master_batches(frames)
+            return
+
+        sync_ids: Set[str] = set()
+        for frame in frames:
+            if "prospect_id" not in frame.columns:
+                continue
+            sync_ids.update(
+                frame.get_column("prospect_id").drop_nulls().cast(pl.Utf8).to_list()
+            )
+
+        partner_list_sql = ", ".join(
+            "'" + p.replace("'", "''") + "'" for p in PARTNER_CANONICAL
+        )
+        partner_filter_sql = (
+            f"AND CAST(m.partner AS VARCHAR) IN ({partner_list_sql})"
+            if purge_non_partners
+            else ""
+        )
+
+        filtered_existing: List[pl.DataFrame] = []
+        if self.parquet_path.exists() and (sync_ids or purge_non_partners):
+            kept_tmp = self.parquet_path.with_name(self.parquet_path.name + ".kept.tmp")
+            used_duckdb = False
+            try:
+                import duckdb
+
+                ids_df = pl.DataFrame(
+                    {"prospect_id": list(sync_ids) if sync_ids else []}
+                ).with_columns(pl.col("prospect_id").cast(pl.Utf8))
+                src = str(self.parquet_path).replace("\\", "/").replace("'", "''")
+                dst = str(kept_tmp).replace("\\", "/").replace("'", "''")
+                con = duckdb.connect()
+                try:
+                    con.register("sync_ids", ids_df.to_arrow())
+                    if sync_ids:
+                        con.execute(
+                            f"""
+                            COPY (
+                                SELECT m.*
+                                FROM read_parquet('{src}') m
+                                ANTI JOIN sync_ids s
+                                  ON CAST(m.prospect_id AS VARCHAR) = s.prospect_id
+                                WHERE 1=1 {partner_filter_sql}
+                            ) TO '{dst}' (FORMAT PARQUET, COMPRESSION ZSTD)
+                            """
+                        )
+                    else:
+                        con.execute(
+                            f"""
+                            COPY (
+                                SELECT m.*
+                                FROM read_parquet('{src}') m
+                                WHERE 1=1 {partner_filter_sql}
+                            ) TO '{dst}' (FORMAT PARQUET, COMPRESSION ZSTD)
+                            """
+                        )
+                finally:
+                    con.close()
+                used_duckdb = kept_tmp.exists()
+            except Exception as exc:
+                logger.warning("lsq_upsert_duckdb_antijoin_failed", error=str(exc))
+                used_duckdb = False
+
+            if used_duckdb:
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+
+                with open(kept_tmp, "rb") as handle:
+                    parquet_file = pq.ParquetFile(handle)
+                    for record_batch in parquet_file.iter_batches(
+                        batch_size=NORMALIZE_CHUNK_SIZE
+                    ):
+                        chunk = pl.from_arrow(pa.Table.from_batches([record_batch]))
+                        if purge_non_partners and "partner" in chunk.columns:
+                            chunk = chunk.filter(
+                                pl.col("partner")
+                                .cast(pl.Utf8)
+                                .is_in(list(PARTNER_CANONICAL))
+                            )
+                        if chunk.height > 0:
+                            filtered_existing.append(chunk)
+                kept_tmp.unlink(missing_ok=True)
+            else:
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+
+                id_list = list(sync_ids)
+                with open(self.parquet_path, "rb") as handle:
+                    parquet_file = pq.ParquetFile(handle)
+                    for record_batch in parquet_file.iter_batches(
+                        batch_size=NORMALIZE_CHUNK_SIZE
+                    ):
+                        chunk = pl.from_arrow(pa.Table.from_batches([record_batch]))
+                        if id_list:
+                            chunk = chunk.filter(
+                                ~pl.col("prospect_id").cast(pl.Utf8).is_in(id_list)
+                            )
+                        if purge_non_partners and "partner" in chunk.columns:
+                            chunk = chunk.filter(
+                                pl.col("partner")
+                                .cast(pl.Utf8)
+                                .is_in(list(PARTNER_CANONICAL))
+                            )
+                        if chunk.height > 0:
+                            filtered_existing.append(chunk)
+
+            self.parquet_path.unlink()
+            if kept_tmp.exists():
+                kept_tmp.unlink(missing_ok=True)
+
+        to_write = filtered_existing + frames
+        if to_write:
+            self._write_master_batches(to_write)

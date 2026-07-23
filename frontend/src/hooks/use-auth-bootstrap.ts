@@ -60,7 +60,7 @@ export async function loginUser(username: string, password: string): Promise<boo
   }
 }
 
+/** Default on locally; set NEXT_PUBLIC_ENABLE_UPLOAD=false on the public (Vercel) build. */
 export function canUpload(): boolean {
-  const user = useAppStore.getState().user;
-  return user?.role === 'admin' || user?.role === 'operations';
+  return process.env.NEXT_PUBLIC_ENABLE_UPLOAD !== 'false';
 }

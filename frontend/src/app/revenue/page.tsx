@@ -7,6 +7,7 @@ import { useFetch } from '@/hooks/use-fetch';
 import { useEffectiveFilters } from '@/store/app-store';
 import { DataTable } from '@/components/tables/data-table';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
+import { FetchingHint } from '@/components/dashboard/fetching-hint';
 import { cn, formatCurrency, formatNumber } from '@/lib/utils';
 
 interface PartnerRoiRow {
@@ -46,7 +47,7 @@ function statusClass(status?: string): string {
 export default function RoiPage() {
   const filters = useEffectiveFilters();
 
-  const { data, loading } = useFetch({
+  const { data, loading, isFetching } = useFetch({
     fetcher: () =>
       api.getRevenue(filters) as Promise<{
         partners: PartnerRoiRow[];
@@ -184,9 +185,13 @@ export default function RoiPage() {
   );
 
   return (
-    <div className="space-y-4">
+    <div className={cn('space-y-4', isFetching && data && 'opacity-90')}>
       <PageHeader title="ROI" />
-      {loading && <p className="text-text-secondary text-sm">Loading...</p>}
+      {loading && !data ? (
+        <p className="text-text-secondary text-sm">Loading...</p>
+      ) : (
+        <FetchingHint active={isFetching} />
+      )}
 
       <SectionHeader
         title="Partner ROI Overview"

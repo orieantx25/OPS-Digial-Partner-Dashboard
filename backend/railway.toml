@@ -1,0 +1,11 @@
+# Railway: create a service from the backend/ folder (or set Root Directory = backend).
+# Attach a persistent volume mounted at /app/data so Parquet + DuckDB survive redeploys.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+restartPolicyType = "ON_FAILURE"
+healthcheckPath = "/health"
+healthcheckTimeout = 30

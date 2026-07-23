@@ -1,0 +1,36 @@
+# Optional Render Blueprint — create a Web Service from backend/ if you prefer the UI.
+# Mount a persistent disk at /app/data (size as needed for parquet + duckdb).
+
+services:
+  - type: web
+    name: dp-dash-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: LEADSQUARED_SYNC_ENABLED
+        value: "false"
+      - key: LOG_LEVEL
+        value: WARNING
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
+      - key: DATA_DIR
+        value: /app/data
+      - key: PARQUET_DIR
+        value: /app/data/parquet
+      - key: METADATA_DB_URL
+        value: sqlite:////app/data/metadata.db
+      - key: DUCKDB_PATH
+        value: /app/data/analytics.duckdb
+    disk:
+      name: dp-data
+      mountPath: /app/data
+      sizeGB: 5

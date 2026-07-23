@@ -44,12 +44,47 @@ class DuckDBRepository:
         self.persona_activity_path = self.settings.parquet_dir / PERSONA_ACTIVITY_PARQUET_FILE
         self.persona_activity_meta_path = self.settings.parquet_dir / PERSONA_ACTIVITY_META_FILE
         self.duckdb_path = self.settings.duckdb_path
+        self._conn: Optional[duckdb.DuckDBPyConnection] = None
+        self._view_stamp: Optional[Tuple[float, float, float]] = None
+        self._row_count_cache: Optional[int] = None
+        self._columns_cache: Optional[List[str]] = None
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
         conn = duckdb.connect(str(self.duckdb_path))
         conn.execute("SET threads TO 4")
         conn.execute("SET memory_limit = '4GB'")
         return conn
+
+    def _file_mtime(self, path: Path) -> float:
+        try:
+            return path.stat().st_mtime if path.exists() else 0.0
+        except OSError:
+            return 0.0
+
+    def _current_view_stamp(self) -> Tuple[float, float, float]:
+        return (
+            self._file_mtime(self.parquet_path),
+            self._file_mtime(self.block_payment_path),
+            self._file_mtime(self.persona_activity_path),
+        )
+
+    def _get_conn(self) -> duckdb.DuckDBPyConnection:
+        if self._conn is None:
+            self._conn = self._connect()
+        stamp = self._current_view_stamp()
+        if stamp != self._view_stamp:
+            self.register_master_view(self._conn)
+            self.register_block_payment_view(self._conn)
+            self.register_persona_activity_view(self._conn)
+            self._view_stamp = stamp
+            self._row_count_cache = None
+            self._columns_cache = None
+        return self._conn
+
+    def invalidate_metadata_cache(self) -> None:
+        self._row_count_cache = None
+        self._columns_cache = None
+        self._view_stamp = None
 
     def master_exists(self) -> bool:
         return self.parquet_path.exists()
@@ -65,12 +100,14 @@ class DuckDBRepository:
             self.block_payment_path.unlink()
         if self.block_payment_meta_path.exists():
             self.block_payment_meta_path.unlink()
+        self.invalidate_metadata_cache()
 
     def _unlink_persona_activity_files(self) -> None:
         if self.persona_activity_path.exists():
             self.persona_activity_path.unlink()
         if self.persona_activity_meta_path.exists():
             self.persona_activity_meta_path.unlink()
+        self.invalidate_metadata_cache()
 
     def clear_block_payment(self) -> None:
         """Delete block payment back-tracking sheet (cleared when master dataset is replaced)."""
@@ -93,26 +130,28 @@ class DuckDBRepository:
         with _lock:
             if self.parquet_path.exists():
                 self.parquet_path.unlink()
-            conn = self._connect()
+            conn = self._get_conn()
             try:
                 conn.execute("DROP TABLE IF EXISTS mv_kpi_daily")
                 conn.execute("DROP TABLE IF EXISTS mv_partner_summary")
-            finally:
-                conn.close()
+            except Exception:
+                pass
+            self.invalidate_metadata_cache()
         logger.info("master_dataset_cleared")
 
     def get_row_count(self) -> int:
         if not self.master_exists():
             return 0
+        if self._row_count_cache is not None:
+            return self._row_count_cache
         with _lock:
-            conn = self._connect()
-            try:
-                result = conn.execute(
-                    f"SELECT COUNT(*) FROM read_parquet('{self._escape_path(self.parquet_path)}')"
-                ).fetchone()
-                return int(result[0]) if result else 0
-            finally:
-                conn.close()
+            conn = self._get_conn()
+            result = conn.execute(
+                f"SELECT COUNT(*) FROM read_parquet('{self._escape_path(self.parquet_path)}')"
+            ).fetchone()
+            count = int(result[0]) if result else 0
+            self._row_count_cache = count
+            return count
 
     def _escape_path(self, path: Path) -> str:
         return str(path).replace("\\", "/").replace("'", "''")
@@ -185,20 +224,14 @@ class DuckDBRepository:
         params: Optional[List[Any]] = None,
     ) -> Tuple[List[str], List[Tuple[Any, ...]]]:
         with _lock:
-            conn = self._connect()
-            try:
-                self.register_master_view(conn)
-                self.register_block_payment_view(conn)
-                self.register_persona_activity_view(conn)
-                if params:
-                    result = conn.execute(sql, params)
-                else:
-                    result = conn.execute(sql)
-                columns = [desc[0] for desc in result.description]
-                rows = result.fetchall()
-                return columns, rows
-            finally:
-                conn.close()
+            conn = self._get_conn()
+            if params:
+                result = conn.execute(sql, params)
+            else:
+                result = conn.execute(sql)
+            columns = [desc[0] for desc in result.description]
+            rows = result.fetchall()
+            return columns, rows
 
     def execute_scalar(self, sql: str, params: Optional[List[Any]] = None) -> Any:
         columns, rows = self.execute_query(sql, params)
@@ -212,10 +245,13 @@ class DuckDBRepository:
 
     def get_master_columns(self) -> List[str]:
         """Column names available in MASTER_DATASET (empty view or parquet)."""
+        if self._columns_cache is not None:
+            return self._columns_cache
         try:
             columns, _ = self.execute_query(
                 f"SELECT * FROM {MASTER_DATASET_TABLE} LIMIT 0"
             )
+            self._columns_cache = columns
             return columns
         except Exception:
             return []
@@ -232,10 +268,8 @@ class DuckDBRepository:
         if not self.master_exists():
             return
         with _lock:
-            conn = self._connect()
-            try:
-                self.register_master_view(conn)
-                conn.execute(f"""
+            conn = self._get_conn()
+            conn.execute(f"""
                     CREATE OR REPLACE TABLE mv_kpi_daily AS
                     SELECT
                         CAST(date AS DATE) AS dt,
@@ -258,7 +292,7 @@ class DuckDBRepository:
                     WHERE date IS NOT NULL
                     GROUP BY CAST(date AS DATE)
                 """)
-                conn.execute(f"""
+            conn.execute(f"""
                     CREATE OR REPLACE TABLE mv_partner_summary AS
                     SELECT
                         partner,
@@ -273,9 +307,8 @@ class DuckDBRepository:
                     WHERE partner IS NOT NULL
                     GROUP BY partner
                 """)
-                logger.info("materialized_views_refreshed")
-            finally:
-                conn.close()
+            logger.info("materialized_views_refreshed")
+            self.invalidate_metadata_cache()
 
 
 class AnalyticsCache:

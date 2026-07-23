@@ -67,9 +67,7 @@ export function LeadSquaredSyncButton() {
     const loadConfig = () => {
       if (stepRef.current !== 'syncing') {
         setConfigState((prev) => (prev === 'ready' ? prev : 'loading'));
-        if (stepRef.current !== 'syncing') {
-          setDisableReason('Checking LeadSquared configuration…');
-        }
+        setDisableReason('Checking LeadSquared configuration…');
       }
 
       api

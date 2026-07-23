@@ -148,6 +148,64 @@ async def alerts(
     return engine.get_alerts(filters)
 
 
+@router.get("/compare")
+async def period_compare(
+    filters: FilterParams = Depends(parse_filters),
+    grain: str = Query("week", pattern="^(week|month)$"),
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    return engine.get_period_compare(filters, grain=grain)
+
+
+@router.get("/funnel/trends")
+async def funnel_trends(
+    filters: FilterParams = Depends(parse_filters),
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    return engine.get_funnel_trends(filters)
+
+
+@router.get("/conversion-rates")
+async def conversion_rates(
+    filters: FilterParams = Depends(parse_filters),
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    return engine.get_conversion_rates(filters)
+
+
+@router.get("/cohorts")
+async def cohorts(
+    filters: FilterParams = Depends(parse_filters),
+    by: str = Query("month", regex="^(week|month)$"),
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    return engine.get_cohorts(filters, by=by)
+
+
+@router.get("/block-payment/attribution")
+async def block_payment_attribution(
+    filters: FilterParams = Depends(parse_filters),
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    return engine.get_block_payment_attribution(filters)
+
+
+@router.get("/anomalies")
+async def anomalies(
+    filters: FilterParams = Depends(parse_filters),
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    return engine.get_anomalies(filters)
+
+
+@router.get("/goals")
+async def goals(
+    filters: FilterParams = Depends(parse_filters),
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    return engine.get_goals(filters)
+
+
 @router.get("/search")
 async def search(
     filters: FilterParams = Depends(parse_filters),

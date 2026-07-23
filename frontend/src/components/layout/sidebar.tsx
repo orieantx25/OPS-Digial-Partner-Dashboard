@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { cn } from '@/lib/utils';
-import { DASHBOARD_PAGES } from '@/types';
+import { DASHBOARD_PAGES, NAV_GROUPS } from '@/types';
 import { useAppStore } from '@/store/app-store';
 import { useUploadStore } from '@/store/upload-store';
 
@@ -50,23 +50,36 @@ export function Sidebar() {
         </div>
       </div>
       <nav className="flex-1 overflow-y-auto py-2">
-        {NAV_PAGES.map((page) => {
-          const Icon = ICONS[page.id] || LayoutDashboard;
-          const active = pathname === page.href || (page.href !== '/' && pathname.startsWith(page.href));
+        {NAV_GROUPS.map((group) => {
+          const pages = NAV_PAGES.filter((p) => p.group === group);
+          if (!pages.length) return null;
           return (
-            <Link
-              key={page.id}
-              href={page.href}
-              className={cn(
-                'flex items-center gap-2.5 px-4 py-2 text-sm border-l-2 transition-none',
-                active
-                  ? 'border-l-primary bg-panel text-text'
-                  : 'border-l-transparent text-text-secondary hover:text-text hover:bg-panel/50'
-              )}
-            >
-              <Icon className="w-4 h-4 shrink-0" />
-              <span className="truncate">{page.label}</span>
-            </Link>
+            <div key={group} className="mb-2">
+              <div className="px-4 py-1.5 text-[10px] uppercase tracking-widest text-text-secondary">
+                {group}
+              </div>
+              {pages.map((page) => {
+                const Icon = ICONS[page.id] || LayoutDashboard;
+                const active =
+                  pathname === page.href ||
+                  (page.href !== '/' && pathname.startsWith(page.href));
+                return (
+                  <Link
+                    key={page.id}
+                    href={page.href}
+                    className={cn(
+                      'flex items-center gap-2.5 px-4 py-2 text-sm border-l-2 transition-none',
+                      active
+                        ? 'border-l-primary bg-panel text-text'
+                        : 'border-l-transparent text-text-secondary hover:text-text hover:bg-panel/50'
+                    )}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span className="truncate">{page.label}</span>
+                  </Link>
+                );
+              })}
+            </div>
           );
         })}
       </nav>

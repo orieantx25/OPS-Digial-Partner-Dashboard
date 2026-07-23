@@ -36,8 +36,9 @@ _lock = threading.Lock()
 class DuckDBRepository:
     """Repository for MASTER_DATASET analytics queries via DuckDB + Parquet."""
 
-    def __init__(self, settings: Optional[Settings] = None):
+    def __init__(self, settings: Optional[Settings] = None, *, read_only: bool = False):
         self.settings = settings or get_settings()
+        self.read_only = read_only
         self.parquet_path = self.settings.parquet_dir / MASTER_PARQUET_FILE
         self.block_payment_path = self.settings.parquet_dir / BLOCK_PAYMENT_PARQUET_FILE
         self.block_payment_meta_path = self.settings.parquet_dir / BLOCK_PAYMENT_META_FILE
@@ -50,7 +51,11 @@ class DuckDBRepository:
         self._columns_cache: Optional[List[str]] = None
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
-        conn = duckdb.connect(str(self.duckdb_path))
+        if self.read_only:
+            # In-memory DB over Parquet — works while uvicorn locks analytics.duckdb.
+            conn = duckdb.connect(":memory:")
+        else:
+            conn = duckdb.connect(str(self.duckdb_path))
         conn.execute("SET threads TO 4")
         conn.execute("SET memory_limit = '4GB'")
         return conn

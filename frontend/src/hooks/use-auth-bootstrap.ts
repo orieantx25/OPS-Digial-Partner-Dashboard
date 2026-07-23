@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { isStaticDataMode } from '@/lib/static-mode';
 import { useAppStore } from '@/store/app-store';
 import { UserInfo } from '@/types';
 
@@ -17,6 +18,16 @@ export function useAuthBootstrap(): boolean {
     let active = true;
 
     async function bootstrap() {
+      if (isStaticDataMode()) {
+        if (active) {
+          setUser(
+            { id: 'leadership', username: 'leadership', role: 'read_only' } as UserInfo,
+            'static'
+          );
+        }
+        return;
+      }
+
       const stored = localStorage.getItem('dp_token');
       if (stored) {
         try {
@@ -62,5 +73,6 @@ export async function loginUser(username: string, password: string): Promise<boo
 
 /** Default on locally; set NEXT_PUBLIC_ENABLE_UPLOAD=false on the public (Vercel) build. */
 export function canUpload(): boolean {
+  if (isStaticDataMode()) return false;
   return process.env.NEXT_PUBLIC_ENABLE_UPLOAD !== 'false';
 }

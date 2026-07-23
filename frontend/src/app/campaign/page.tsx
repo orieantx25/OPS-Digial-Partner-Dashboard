@@ -49,7 +49,7 @@ function aggregateTopCampaigns(rows: CampaignRow[], limit = 5) {
     byKey.set(key, cur);
   }
 
-  return [...byKey.values()]
+  return Array.from(byKey.values())
     .sort((a, b) => b.leads - a.leads)
     .slice(0, limit);
 }

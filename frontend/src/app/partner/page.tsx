@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ColumnDef } from '@tanstack/react-table';
 import { api } from '@/lib/api';
 import { useFetch } from '@/hooks/use-fetch';
@@ -13,6 +14,7 @@ import { ClickableMetricBox } from '@/components/dashboard/clickable-metric-box'
 import { cn, formatNumber, formatPct } from '@/lib/utils';
 import { KPI_LEAD_FILTERS } from '@/lib/lead-filters';
 import { useLeadExplorerStore } from '@/store/lead-explorer-store';
+import { isLeadershipMode } from '@/lib/static-mode';
 
 interface PartnerDetail {
   partner?: string;
@@ -25,6 +27,53 @@ interface PartnerDetail {
   }[];
   block_counsellor_clashes?: PartnerCounsellorClashes;
   performance_score?: number;
+  trend?: { month?: string; leads?: number }[];
+  daily_leads?: ChartData;
+  weekly_leads?: ChartData;
+  monthly_leads?: ChartData;
+}
+
+const PARTNER_TREND_OPTIONS = [
+  { key: 'daily_leads', label: 'Daily' },
+  { key: 'weekly_leads', label: 'Weekly' },
+  { key: 'monthly_leads', label: 'Monthly' },
+] as const;
+
+function emptyPartnerTrendChart(id: string, title: string): ChartData {
+  return {
+    chart_id: id,
+    chart_type: 'line',
+    title,
+    categories: [],
+    series: [{ name: 'Leads', data: [] }],
+  };
+}
+
+/** Prefer API time-series charts; fall back to legacy monthly `trend` rows. */
+function resolvePartnerTrendChart(
+  detail: PartnerDetail | null | undefined,
+  key: (typeof PARTNER_TREND_OPTIONS)[number]['key'],
+  partnerName: string
+): ChartData {
+  const label = PARTNER_TREND_OPTIONS.find((o) => o.key === key)?.label ?? 'Leads';
+  const title = `${partnerName} — ${label} Leads`;
+  const fromApi = detail?.[key];
+  if (fromApi?.categories?.length && fromApi.series?.some((s) => s.data.length > 0)) {
+    return { ...fromApi, title };
+  }
+
+  if (key === 'monthly_leads' && detail?.trend?.length) {
+    const rows = detail.trend.filter((r) => r.month);
+    return {
+      chart_id: 'partner_monthly_from_trend',
+      chart_type: 'line',
+      title,
+      categories: rows.map((r) => String(r.month)),
+      series: [{ name: 'Leads', data: rows.map((r) => Number(r.leads || 0)) }],
+    };
+  }
+
+  return emptyPartnerTrendChart(key, title);
 }
 
 const PARTNER_METRICS: {
@@ -83,13 +132,50 @@ function useClashColumns(): ColumnDef<PartnerCounsellorClash>[] {
 }
 
 export default function PartnerPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="text-text-secondary text-sm panel p-4">Loading partner analytics…</div>
+      }
+    >
+      <PartnerPageInner />
+    </Suspense>
+  );
+}
+
+function PartnerPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const filters = useEffectiveFilters();
-  const [selectedPartner, setSelectedPartner] = useState<string | null>(null);
+  const partnerFromUrl = searchParams.get('partner');
+  const [selectedPartner, setSelectedPartner] = useState<string | null>(partnerFromUrl);
+  const [partnerTrend, setPartnerTrend] =
+    useState<(typeof PARTNER_TREND_OPTIONS)[number]['key']>('monthly_leads');
   const setDrillDown = useAppStore((s) => s.setDrillDown);
   const clearDrillDown = useAppStore((s) => s.clearDrillDown);
   const openExplorer = useLeadExplorerStore((s) => s.openExplorer);
   const leadColumns = useLeadColumns();
   const clashColumns = useClashColumns();
+  const leadership = isLeadershipMode();
+
+  useEffect(() => {
+    if (partnerFromUrl) {
+      setSelectedPartner(partnerFromUrl);
+      setDrillDown({ partner: partnerFromUrl });
+    }
+  }, [partnerFromUrl, setDrillDown]);
+
+  const selectPartner = (partner: string) => {
+    setSelectedPartner(partner);
+    setDrillDown({ partner });
+    router.replace(`/partner?partner=${encodeURIComponent(partner)}`, { scroll: false });
+  };
+
+  const clearPartner = () => {
+    setSelectedPartner(null);
+    clearDrillDown();
+    router.replace('/partner', { scroll: false });
+  };
 
   const { data: comparison } = useFetch({
     fetcher: () => api.getPartner(filters) as Promise<ChartData>,
@@ -99,6 +185,12 @@ export default function PartnerPage() {
 
   const { data: clashes } = useFetch({
     fetcher: () => api.getPartnerCounsellorClashes(filters),
+    deps: [JSON.stringify(filters)],
+    enabled: !selectedPartner,
+  });
+
+  const { data: conversionRates } = useFetch({
+    fetcher: () => api.getConversionRates(filters),
     deps: [JSON.stringify(filters)],
     enabled: !selectedPartner,
   });
@@ -167,6 +259,16 @@ export default function PartnerPage() {
     { accessorKey: 'admissions', header: 'Admissions' },
   ];
 
+  const conversionColumns: ColumnDef<Record<string, unknown>>[] = [
+    { accessorKey: 'partner', header: 'Partner' },
+    { accessorKey: 'leads', header: 'Leads' },
+    { accessorKey: 'connected_pct', header: 'Connected %' },
+    { accessorKey: 'lead_to_block_pct', header: 'Lead → Block %' },
+    { accessorKey: 'lead_to_admission_pct', header: 'Lead → Admission %' },
+    { accessorKey: 'block_amount_paid', header: 'Block Paid' },
+    { accessorKey: 'admissions', header: 'Admissions' },
+  ];
+
   const blockAmountColumns: ColumnDef<Record<string, unknown>>[] = useMemo(
     () => [...leadColumns],
     [leadColumns]
@@ -221,14 +323,33 @@ export default function PartnerPage() {
 
       {!selectedPartner && comparison && (
         <>
-          <ChartPanel chart={comparison} height={360} />
+          <ChartPanel
+            chart={comparison}
+            height={360}
+            onCategoryClick={(partner) => {
+              selectPartner(partner);
+            }}
+          />
           <DataTable
             data={partnerRows}
             columns={columns}
             onRowClick={(row) => {
-              setSelectedPartner(String(row.partner));
-              setDrillDown({ partner: String(row.partner) });
+              selectPartner(String(row.partner));
             }}
+          />
+
+          <SectionHeader
+            title="Conversion rates"
+            subtitle="Lead → Block / Admission by partner"
+          />
+          <DataTable
+            data={(conversionRates?.by_partner ?? []) as Record<string, unknown>[]}
+            columns={conversionColumns}
+            onRowClick={(row) => {
+              selectPartner(String(row.partner));
+            }}
+            exportFilename="partner_conversion_rates.csv"
+            height={280}
           />
 
           <SectionHeader
@@ -236,7 +357,7 @@ export default function PartnerPage() {
             subtitle={
               clashes?.has_sheet
                 ? 'From block payment backtracking — partner-attributed leads with Counsellor at payment'
-                : 'Upload block amount paid sheet on Block Payment Back tracking tab'
+                : 'Upload block amount paid sheet on Block Payment tab'
             }
           />
 
@@ -260,13 +381,15 @@ export default function PartnerPage() {
                   </div>
                 </div>
               </div>
-              <DataTable
-                data={clashes.rows}
-                columns={clashColumns}
-                exportFilename="partner_counsellor_clashes.csv"
-                searchPlaceholder="Search clashes…"
-                height={360}
-              />
+              {!leadership && (
+                <DataTable
+                  data={clashes.rows}
+                  columns={clashColumns}
+                  exportFilename="partner_counsellor_clashes.csv"
+                  searchPlaceholder="Search clashes…"
+                  height={360}
+                />
+              )}
             </>
           ) : (
             <p className="text-text-secondary text-sm panel p-4">
@@ -281,10 +404,7 @@ export default function PartnerPage() {
           <button
             type="button"
             className="btn-secondary text-xs"
-            onClick={() => {
-              setSelectedPartner(null);
-              clearDrillDown();
-            }}
+            onClick={clearPartner}
           >
             ← All Partners
           </button>
@@ -336,6 +456,34 @@ export default function PartnerPage() {
               </div>
 
               <SectionHeader
+                title="Lead volume"
+                subtitle={`Daily / weekly / monthly leads for ${partnerName}`}
+                action={
+                  <div className="flex border border-border">
+                    {PARTNER_TREND_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => setPartnerTrend(opt.key)}
+                        className={
+                          'px-3 py-1 text-xs ' +
+                          (partnerTrend === opt.key
+                            ? 'bg-primary text-white'
+                            : 'bg-surface text-text-secondary hover:text-text')
+                        }
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                }
+              />
+              <ChartPanel
+                chart={resolvePartnerTrendChart(detail, partnerTrend, partnerName)}
+                height={320}
+              />
+
+              <SectionHeader
                 title="Contact Stage Summary"
                 subtitle={`All contact stages for ${partnerName} · ${formatNumber(contactStageSummary.length)} stages`}
               />
@@ -364,16 +512,23 @@ export default function PartnerPage() {
               />
               {partnerClashes?.has_sheet ? (
                 clashCount > 0 ? (
-                  <DataTable
-                    data={clashRows}
-                    columns={clashColumns.filter((c) => {
-                      const key = (c as { accessorKey?: string }).accessorKey;
-                      return key !== 'partner';
-                    })}
-                    exportFilename={`${partnerName.replace(/\s+/g, '_')}_counsellor_clashes.csv`}
-                    searchPlaceholder="Search clashes…"
-                    height={320}
-                  />
+                  leadership ? (
+                    <p className="text-text-secondary text-sm panel p-4">
+                      {formatNumber(clashCount)} counsellor clashes (lead-level list hidden on
+                      leadership view).
+                    </p>
+                  ) : (
+                    <DataTable
+                      data={clashRows}
+                      columns={clashColumns.filter((c) => {
+                        const key = (c as { accessorKey?: string }).accessorKey;
+                        return key !== 'partner';
+                      })}
+                      exportFilename={`${partnerName.replace(/\s+/g, '_')}_counsellor_clashes.csv`}
+                      searchPlaceholder="Search clashes…"
+                      height={320}
+                    />
+                  )
                 ) : (
                   <p className="text-text-secondary text-sm panel p-4">
                     No counsellor payment clashes for this partner.
@@ -385,17 +540,21 @@ export default function PartnerPage() {
                 </p>
               )}
 
-              <SectionHeader
-                title="Block Amount Paid Leads"
-                subtitle={`${formatNumber(blockLeads.length)} leads from ${partnerName}`}
-              />
-              <DataTable
-                data={blockLeads}
-                columns={blockAmountColumns}
-                exportFilename={`${partnerName.replace(/\s+/g, '_')}_block_amount_paid.csv`}
-                searchPlaceholder="Search within block amount paid leads..."
-                height={360}
-              />
+              {!leadership && (
+                <>
+                  <SectionHeader
+                    title="Block Amount Paid Leads"
+                    subtitle={`${formatNumber(blockLeads.length)} leads from ${partnerName}`}
+                  />
+                  <DataTable
+                    data={blockLeads}
+                    columns={blockAmountColumns}
+                    exportFilename={`${partnerName.replace(/\s+/g, '_')}_block_amount_paid.csv`}
+                    searchPlaceholder="Search within block amount paid leads..."
+                    height={360}
+                  />
+                </>
+              )}
             </>
           )}
         </div>

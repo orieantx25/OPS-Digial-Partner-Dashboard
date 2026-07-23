@@ -6,6 +6,20 @@ import { ChevronDown, X, RotateCcw, Upload } from 'lucide-react';
 import { LeadSquaredSyncButton } from '@/components/sync/leadsquared-sync-button';
 import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { api } from '@/lib/api';
+import {
+  DATE_PRESETS,
+  DatePresetId,
+  datePresetRange,
+  matchDatePreset,
+  scopeChipLabel,
+} from '@/lib/date-presets';
+import {
+  getSnapshotManifest,
+  isLeadershipMode,
+  isStaticDataMode,
+  type SnapshotManifest,
+  type SnapshotScopeId,
+} from '@/lib/static-mode';
 import { useAppStore } from '@/store/app-store';
 import { useUploadStore } from '@/store/upload-store';
 import { FilterOptions, FilterParams } from '@/types';
@@ -188,6 +202,9 @@ export function FilterBar() {
   const openUpload = useUploadStore((s) => s.openUpload);
   const dataRefreshToken = useUploadStore((s) => s.dataRefreshToken);
   const [options, setOptions] = useState<FilterOptions | null>(null);
+  const [manifest, setManifest] = useState<SnapshotManifest | null>(null);
+  const leadership = isLeadershipMode();
+  const staticMode = isStaticDataMode();
 
   const setFilters = useCallback(
     (patch: Partial<FilterParams>) => {
@@ -223,34 +240,127 @@ export function FilterBar() {
     };
   }, [dataRefreshToken]);
 
+  useEffect(() => {
+    if (!staticMode) return;
+    let active = true;
+    getSnapshotManifest().then((m) => {
+      if (active) setManifest(m);
+    });
+    return () => {
+      active = false;
+    };
+  }, [staticMode]);
+
+  const activePresetFromManifest = (): SnapshotScopeId | 'all' | null => {
+    if (!filters.date_from && !filters.date_to) return 'all';
+    if (!manifest?.scopes) return null;
+    for (const id of ['7d', 'mtd', '30d', 'month'] as SnapshotScopeId[]) {
+      const s = manifest.scopes[id];
+      if (!s) continue;
+      if (
+        (s.date_from || undefined) === filters.date_from &&
+        (s.date_to || undefined) === filters.date_to
+      ) {
+        return id;
+      }
+    }
+    return null;
+  };
+
+  const activePreset = staticMode
+    ? activePresetFromManifest()
+    : matchDatePreset(filters.date_from, filters.date_to);
+
+  const applyPreset = (id: DatePresetId) => {
+    if (staticMode && manifest?.scopes?.[id]) {
+      const s = manifest.scopes[id];
+      setFilters(
+        dateRangePatch(s.date_from || undefined, s.date_to || undefined)
+      );
+      return;
+    }
+    const range = datePresetRange(id);
+    setFilters(dateRangePatch(range.date_from, range.date_to));
+  };
+
+  const applyAllTime = () => {
+    setFilters(dateRangePatch(undefined, undefined));
+  };
+
+  const scopeLabel = scopeChipLabel({
+    date_from: filters.date_from,
+    date_to: filters.date_to,
+    partners: drillDown.partner ? [drillDown.partner] : filters.partner,
+  });
+
   return (
     <div className="sticky top-0 z-30 bg-bg border-b border-border">
       <div className="flex items-end gap-3 px-4 py-2 overflow-x-auto">
-        <div className="flex flex-col gap-0.5 min-w-[120px]">
-          <label className="text-[10px] uppercase tracking-wide text-text-secondary">Date From</label>
-          <input
-            type="date"
-            className="input-field text-xs"
-            value={filters.date_from || ''}
-            max={filters.date_to || undefined}
-            onChange={(e) =>
-              setFilters(dateRangePatch(e.target.value || undefined, filters.date_to))
-            }
-          />
+        {!leadership && (
+          <>
+            <div className="flex flex-col gap-0.5 min-w-[120px]">
+              <label className="text-[10px] uppercase tracking-wide text-text-secondary">
+                Date From
+              </label>
+              <input
+                type="date"
+                className="input-field text-xs"
+                value={filters.date_from || ''}
+                max={filters.date_to || undefined}
+                onChange={(e) =>
+                  setFilters(dateRangePatch(e.target.value || undefined, filters.date_to))
+                }
+              />
+            </div>
+            <div className="flex flex-col gap-0.5 min-w-[120px]">
+              <label className="text-[10px] uppercase tracking-wide text-text-secondary">
+                Date To
+              </label>
+              <input
+                type="date"
+                className="input-field text-xs"
+                value={filters.date_to || ''}
+                min={filters.date_from || undefined}
+                onChange={(e) =>
+                  setFilters(dateRangePatch(filters.date_from, e.target.value || undefined))
+                }
+              />
+            </div>
+          </>
+        )}
+        <div className="flex flex-col gap-0.5">
+          <label className="text-[10px] uppercase tracking-wide text-text-secondary">Preset</label>
+          <div className="flex border border-border h-[30px]">
+            <button
+              type="button"
+              onClick={applyAllTime}
+              className={
+                'px-2 text-[11px] whitespace-nowrap ' +
+                (activePreset === 'all' || (!filters.date_from && !filters.date_to)
+                  ? 'bg-primary text-white'
+                  : 'bg-surface text-text-secondary hover:text-text')
+              }
+            >
+              All time
+            </button>
+            {DATE_PRESETS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => applyPreset(p.id)}
+                className={
+                  'px-2 text-[11px] whitespace-nowrap ' +
+                  (activePreset === p.id
+                    ? 'bg-primary text-white'
+                    : 'bg-surface text-text-secondary hover:text-text')
+                }
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex flex-col gap-0.5 min-w-[120px]">
-          <label className="text-[10px] uppercase tracking-wide text-text-secondary">Date To</label>
-          <input
-            type="date"
-            className="input-field text-xs"
-            value={filters.date_to || ''}
-            min={filters.date_from || undefined}
-            onChange={(e) =>
-              setFilters(dateRangePatch(filters.date_from, e.target.value || undefined))
-            }
-          />
-        </div>
-        {options && (
+        {!leadership && options && (
           <>
             <MultiSelect
               label="Partner"
@@ -286,7 +396,7 @@ export function FilterBar() {
               <RotateCcw className="w-3 h-3" /> Reset
             </button>
           </div>
-          <LeadSquaredSyncButton />
+          {!leadership && <LeadSquaredSyncButton />}
           {canUpload() && (
             <div className="flex flex-col gap-0.5">
               <label className="text-[10px] uppercase tracking-wide text-text-secondary opacity-0 select-none">
@@ -303,17 +413,27 @@ export function FilterBar() {
           )}
         </div>
       </div>
-      {(drillDown.partner || drillDown.state || drillDown.city) && (
-        <div className="flex items-center gap-2 px-4 py-1 bg-surface border-t border-border text-xs">
-          <span className="text-text-secondary">Drill-down:</span>
-          {drillDown.partner && <span className="text-primary">{drillDown.partner}</span>}
-          {drillDown.state && <span>→ {drillDown.state}</span>}
-          {drillDown.city && <span>→ {drillDown.city}</span>}
-          <button type="button" onClick={clearDrillDown} className="ml-2 text-text-secondary hover:text-primary">
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      )}
+      <div className="flex flex-wrap items-center gap-2 px-4 py-1 bg-surface border-t border-border text-xs">
+        <span className="text-text-secondary">Scope:</span>
+        <span className="text-text font-medium">{scopeLabel}</span>
+        {(drillDown.partner || drillDown.state || drillDown.city) && (
+          <>
+            <span className="text-border">|</span>
+            <span className="text-text-secondary">Drill-down:</span>
+            {drillDown.partner && <span className="text-primary">{drillDown.partner}</span>}
+            {drillDown.state && <span>→ {drillDown.state}</span>}
+            {drillDown.city && <span>→ {drillDown.city}</span>}
+            <button
+              type="button"
+              onClick={clearDrillDown}
+              className="ml-1 text-text-secondary hover:text-primary"
+              aria-label="Clear drill-down"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

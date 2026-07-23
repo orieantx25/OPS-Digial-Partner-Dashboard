@@ -10,10 +10,11 @@ import {
   PaginatedResponse,
   PartnerCounsellorClashes,
   PersonaAnalytics,
-  PersonaSummary,
   StateSummary,
   UploadJob,
 } from '@/types';
+import { staticApi } from '@/lib/static-api';
+import { isStaticDataMode } from '@/lib/static-mode';
 
 const API_BASE = '/api/v1';
 
@@ -67,7 +68,7 @@ export function filtersToQuery(filters: FilterParams): Record<string, unknown> {
   return { ...filters };
 }
 
-export const api = {
+const liveApi = {
   login: (username: string, password: string) =>
     request<{ access_token: string; user: { id: string; username: string; role: string } }>(
       '/auth/login',
@@ -171,15 +172,74 @@ export const api = {
   getAlerts: (filters: FilterParams) =>
     request<AlertItem[]>(`/analytics/alerts${buildQuery(filtersToQuery(filters))}`),
 
+  getCompare: (filters: FilterParams, grain: 'week' | 'month' = 'week') =>
+    request<{
+      grain: string;
+      current_from?: string;
+      current_to?: string;
+      previous_from?: string;
+      previous_to?: string;
+      kpis: {
+        key: string;
+        label: string;
+        current: number;
+        previous: number;
+        change_pct: number;
+      }[];
+      funnel_rates: {
+        stage: string;
+        current_pct: number;
+        previous_pct: number;
+      }[];
+    }>(`/analytics/compare${buildQuery({ ...filtersToQuery(filters), grain })}`),
+
+  getFunnelTrends: (filters: FilterParams) =>
+    request<ChartData>(`/analytics/funnel/trends${buildQuery(filtersToQuery(filters))}`),
+
+  getConversionRates: (filters: FilterParams) =>
+    request<{
+      by_partner: Record<string, unknown>[];
+      by_campaign: Record<string, unknown>[];
+    }>(`/analytics/conversion-rates${buildQuery(filtersToQuery(filters))}`),
+
+  getCohorts: (filters: FilterParams, by: 'week' | 'month' = 'month') =>
+    request<{
+      by: string;
+      cohorts: Record<string, unknown>[];
+    }>(`/analytics/cohorts${buildQuery({ ...filtersToQuery(filters), by })}`),
+
+  getBlockPaymentAttribution: (filters: FilterParams) =>
+    request<{
+      has_sheet: boolean;
+      row_count: number;
+      by_source_at_payment: { label: string; count: number }[];
+      by_campaign_at_payment: { label: string; count: number }[];
+      by_coupon: { label: string; count: number }[];
+      by_college: { label: string; count: number }[];
+      by_original_utm_campaign: { label: string; count: number }[];
+    }>(`/analytics/block-payment/attribution${buildQuery(filtersToQuery(filters))}`),
+
+  getAnomalies: (filters: FilterParams) =>
+    request<AlertItem[]>(`/analytics/anomalies${buildQuery(filtersToQuery(filters))}`),
+
+  getGoals: (filters: FilterParams) =>
+    request<{
+      partners: {
+        partner: string;
+        block_roi: number;
+        target_blocks: number;
+        progress_pct: number;
+        gap_blocks: number;
+        status?: string;
+      }[];
+      totals: { on_track: number; behind: number };
+    }>(`/analytics/goals${buildQuery(filtersToQuery(filters))}`),
+
   search: (filters: FilterParams, page = 1, pageSize = 50) =>
     request<PaginatedResponse<LeadRecord>>(
       `/analytics/search${buildQuery({ ...filtersToQuery(filters), page, page_size: pageSize })}`
     ),
 
-  /**
-   * Starts a background upload. Resolves with a job_id once the file bytes have
-   * been received by the server. `onUploadProgress` reports network upload % (0-100).
-   */
   uploadStart: (files: File[], onUploadProgress?: (pct: number) => void) =>
     new Promise<{ job_id: string; status: string }>((resolve, reject) => {
       const form = new FormData();
@@ -249,3 +309,15 @@ export const api = {
   exportCsv: (filters: FilterParams) =>
     request<string>(`/analytics/export${buildQuery({ ...filtersToQuery(filters), format: 'csv' })}`),
 };
+
+type LiveApi = typeof liveApi;
+
+/** Live FastAPI client locally; snapshot JSON when NEXT_PUBLIC_DATA_MODE=static. */
+export const api: LiveApi = new Proxy(liveApi, {
+  get(target, prop, receiver) {
+    if (isStaticDataMode() && typeof prop === 'string' && prop in staticApi) {
+      return (staticApi as Record<string, unknown>)[prop];
+    }
+    return Reflect.get(target, prop, receiver);
+  },
+}) as LiveApi;

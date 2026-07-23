@@ -14,13 +14,14 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Download, Search } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { cn, downloadBlob, formatNumber } from '@/lib/utils';
+import { isLeadershipMode } from '@/lib/static-mode';
 
 interface ColumnMeta {
   width?: string;
   minWidth?: number;
 }
 
-interface DataTableProps<T extends Record<string, unknown>> {
+interface DataTableProps<T extends object> {
   data: T[];
   columns: ColumnDef<T>[];
   onRowClick?: (row: T) => void;
@@ -42,7 +43,7 @@ function columnWidth(col: { columnDef: { meta?: unknown } }, total: number): str
   return meta.width ?? `${100 / Math.max(total, 1)}%`;
 }
 
-export function DataTable<T extends Record<string, unknown>>({
+export function DataTable<T extends object>({
   data,
   columns,
   onRowClick,
@@ -126,10 +127,12 @@ export function DataTable<T extends Record<string, unknown>>({
             {formatNumber(totalCount)} matches
           </span>
         )}
-        <button type="button" className="btn-secondary flex items-center gap-1 ml-auto" onClick={handleExport}>
-          <Download className="w-3.5 h-3.5" />
-          Export
-        </button>
+        {!isLeadershipMode() && (
+          <button type="button" className="btn-secondary flex items-center gap-1 ml-auto" onClick={handleExport}>
+            <Download className="w-3.5 h-3.5" />
+            Export
+          </button>
+        )}
       </div>
 
       {/* One horizontal scroller so headers and rows move together */}
@@ -212,6 +215,9 @@ export function useLeadColumns(): ColumnDef<Record<string, unknown>>[] {
       { accessorKey: 'funnel_stage', header: 'Stage', meta: { minWidth: 110 } },
       { accessorKey: 'contact_stage', header: 'Contact', meta: { minWidth: 120 } },
       { accessorKey: 'date', header: 'Date', meta: { minWidth: 100 } },
+      { accessorKey: 'lead_age_days', header: 'Age (days)', meta: { minWidth: 90 } },
+      { accessorKey: 'device', header: 'Device', meta: { minWidth: 90 } },
+      { accessorKey: 'last_activity_date', header: 'Last activity', meta: { minWidth: 110 } },
     ],
     []
   );

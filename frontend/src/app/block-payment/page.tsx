@@ -46,6 +46,11 @@ export default function BlockPaymentPage() {
     deps: [JSON.stringify(filters), sheetRefresh],
   });
 
+  const { data: attribution } = useFetch({
+    fetcher: () => api.getBlockPaymentAttribution(filters),
+    deps: [sheetRefresh],
+  });
+
   const uploadFile = useCallback(async (file: File) => {
     setUploadStep('uploading');
     setUploadError(null);
@@ -335,6 +340,44 @@ export default function BlockPaymentPage() {
               No partner counsellor clashes in the backtracking data.
             </p>
           )}
+        </>
+      )}
+
+      {sheetStatus?.has_data && attribution?.has_sheet && (
+        <>
+          <SectionHeader
+            title="Payment attribution"
+            subtitle="From uploaded sheet — source / campaign at payment, coupon, campus"
+          />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {(
+              [
+                ['Source at payment', attribution.by_source_at_payment],
+                ['Campaign at payment', attribution.by_campaign_at_payment],
+                ['Coupon', attribution.by_coupon],
+                ['College', attribution.by_college],
+              ] as const
+            ).map(([title, rows]) => (
+              <div key={title} className="panel p-3">
+                <div className="text-xs uppercase tracking-widest text-text-secondary mb-2">
+                  {title}
+                </div>
+                <ul className="space-y-1 max-h-40 overflow-y-auto text-sm">
+                  {(rows ?? []).slice(0, 8).map((r) => (
+                    <li key={`${title}-${r.label}`} className="flex justify-between gap-2">
+                      <span className="truncate text-text">{r.label}</span>
+                      <span className="kpi-value text-text-secondary shrink-0">
+                        {formatNumber(r.count)}
+                      </span>
+                    </li>
+                  ))}
+                  {!rows?.length && (
+                    <li className="text-text-secondary text-xs">No data</li>
+                  )}
+                </ul>
+              </div>
+            ))}
+          </div>
         </>
       )}
 

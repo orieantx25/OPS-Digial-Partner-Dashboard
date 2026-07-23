@@ -45,6 +45,14 @@ npm run dev
 
 Open http://localhost:3000
 
+### Leadership on Vercel (no hosted DB)
+
+1. Locally refresh data, then `npm run publish:snapshots`
+2. Push `frontend/public/data/snapshots/`
+3. Vercel: Root Directory = `frontend`, env from `frontend/.env.vercel.example`
+
+See [Deployment](docs/DEPLOYMENT.md).
+
 ### Generate Sample Data
 
 ```bash

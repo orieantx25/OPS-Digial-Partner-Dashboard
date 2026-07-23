@@ -55,6 +55,41 @@ def _first_nonempty(*values: Any) -> Optional[Any]:
     return None
 
 
+def _safe_frame_from_rows(rows: List[Dict[str, Any]]) -> pl.DataFrame:
+    """Build a DataFrame without failing on mixed-type columns.
+
+    LeadSquared (and some uploads) often put numbers in early rows and strings
+    later (e.g. a name like \"MOYLI P R\"). Inferring from only the first N rows
+    then crashes; scan all rows, and fall back to Utf8 coercion if needed.
+    """
+    if not rows:
+        return pl.DataFrame()
+
+    try:
+        # None => inspect every row before choosing dtypes.
+        return pl.DataFrame(rows, infer_schema_length=None)
+    except Exception as exc:
+        logger.warning("polars_infer_failed_coerce_utf8", error=str(exc))
+
+    keys: List[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row.keys():
+            if key not in seen:
+                seen.add(key)
+                keys.append(key)
+
+    def _as_utf8(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        return str(value)
+
+    cols = {key: [_as_utf8(row.get(key)) for row in rows] for key in keys}
+    return pl.DataFrame(cols)
+
+
 def map_leads_to_dataframe(leads: List[Dict[str, Any]]) -> pl.DataFrame:
     """Convert LSQ lead attribute dicts into a Polars frame with canonical columns.
 
@@ -111,7 +146,7 @@ def map_leads_to_dataframe(leads: List[Dict[str, Any]]) -> pl.DataFrame:
     if not rows:
         return pl.DataFrame()
 
-    df = pl.DataFrame(rows, infer_schema_length=min(len(rows), 1000))
+    df = _safe_frame_from_rows(rows)
     drop_cols = [c for c in df.columns if c.startswith("_")]
     if drop_cols:
         df = df.drop(drop_cols)
@@ -148,4 +183,4 @@ def map_activities_to_dataframe(activities: List[Dict[str, Any]]) -> pl.DataFram
             mapped["activity_id"] = act["Id"]
         rows.append(mapped)
 
-    return pl.DataFrame(rows, infer_schema_length=min(len(rows), 1000)) if rows else pl.DataFrame()
+    return _safe_frame_from_rows(rows)

@@ -24,6 +24,19 @@ export default function PredictivePage() {
   const blockForecast =
     (data?.block_amount_forecast as { period: string; value: number }[] | undefined) ?? [];
 
+  const horizon = data?.forecast_horizon as { from?: string; to?: string } | undefined;
+  const rangeLabel =
+    horizon?.from && horizon?.to
+      ? `${horizon.from} → ${horizon.to}`
+      : leadForecast.length
+        ? leadForecast.map((f) => f.period).join(' · ')
+        : 'forecast horizon';
+
+  const monthsUsed = Math.max(
+    Number(data?.lead_months_used || 0),
+    Number(data?.block_months_used || 0)
+  );
+
   return (
     <div className={cn('space-y-4', isFetching && data && 'opacity-90')}>
       <PageHeader title="Predictive Analytics" />
@@ -34,7 +47,7 @@ export default function PredictivePage() {
       )}
       <SectionHeader
         title="Lead Forecast"
-        subtitle="Current leads vs expected July–August · based on all previous months"
+        subtitle={`Current vs expected (${rangeLabel}) · based on prior monthly history`}
       />
       <div className="panel grid grid-cols-2 md:grid-cols-4 gap-px bg-border max-w-3xl">
         <div className="bg-surface px-4 py-3">
@@ -65,7 +78,7 @@ export default function PredictivePage() {
 
       <SectionHeader
         title="Block Amount Forecast"
-        subtitle="Current block amount paid vs expected July–August · based on all previous months"
+        subtitle={`Current vs expected (${rangeLabel}) · based on prior monthly history`}
       />
       <div className="panel grid grid-cols-2 md:grid-cols-4 gap-px bg-border max-w-3xl">
         <div className="bg-surface px-4 py-3">
@@ -95,9 +108,10 @@ export default function PredictivePage() {
       {blockChart && <ChartPanel chart={blockChart} height={340} />}
 
       <p className="text-[11px] text-text-secondary">
-        Expected values use every previous month before July: average month-over-month jump across
-        the full history, blended with a linear trend on the same months, then projected for July
-        and August. Solid line = current actuals; light dashed line = expected.
+        Expected values use average month-over-month jump across prior months
+        {monthsUsed > 0 ? ` (${formatNumber(monthsUsed)} months)` : ''}, blended with a linear
+        trend, then projected for {rangeLabel}. Solid line = current actuals; light dashed line =
+        expected.
       </p>
     </div>
   );

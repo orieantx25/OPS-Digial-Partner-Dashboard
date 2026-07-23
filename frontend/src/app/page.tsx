@@ -2,17 +2,23 @@
 
 import dynamic from 'next/dynamic';
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useFetch, useDebouncedValue } from '@/hooks/use-fetch';
 import { useAppStore, useEffectiveFilters } from '@/store/app-store';
 import { MetricStrip } from '@/components/dashboard/metric-strip';
+import { AlertsPanel } from '@/components/dashboard/alerts-panel';
+import { InsightStrip } from '@/components/dashboard/insight-strip';
 import { FetchingHint } from '@/components/dashboard/fetching-hint';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { DataTable, useLeadColumns } from '@/components/tables/data-table';
 import { EMPTY_EXECUTIVE_CHARTS, EMPTY_KPIS } from '@/lib/empty-defaults';
+import { FUNNEL_STAGE_LEAD_FILTERS } from '@/lib/funnel-filters';
 import { useDatasetStats } from '@/hooks/use-dataset-stats';
-import { cn, formatNumber } from '@/lib/utils';
-import { ChartData } from '@/types';
+import { useLeadExplorerStore } from '@/store/lead-explorer-store';
+import { isLeadershipMode } from '@/lib/static-mode';
+import { cn, formatNumber, formatPct } from '@/lib/utils';
+import { ChartData, KpiMetric } from '@/types';
 
 const ChartPanel = dynamic(
   () => import('@/components/charts/chart-panel').then((m) => m.ChartPanel),
@@ -37,6 +43,8 @@ const IndiaMap = dynamic(
     ),
   }
 );
+
+const BLOCK_BULLET_TOP_N = 5;
 
 function buildBlockAmountPoints(chart: ChartData | undefined): string[] {
   if (!chart?.categories?.length) {
@@ -67,18 +75,74 @@ function buildBlockAmountPoints(chart: ChartData | undefined): string[] {
     ];
   }
 
+  const top = withBlocks.slice(0, BLOCK_BULLET_TOP_N);
   const points = [
     `Total block amount paid across partners: ${formatNumber(total)}`,
-    ...withBlocks.map((r) => `${r.partner}: ${formatNumber(r.block)}`),
+    ...top.map((r) => `${r.partner}: ${formatNumber(r.block)}`),
   ];
+
+  if (withBlocks.length > BLOCK_BULLET_TOP_N) {
+    points.push(
+      `+${withBlocks.length - BLOCK_BULLET_TOP_N} more partner(s) with block payments`
+    );
+  }
 
   if (withoutBlocks.length > 0) {
     points.push(
-      `No block amount paid: ${withoutBlocks.map((r) => r.partner).join(', ')}`
+      `${withoutBlocks.length} partner(s) with zero block amount paid`
     );
   }
 
   return points;
+}
+
+function overviewInsights(
+  kpis: KpiMetric[],
+  funnel: ChartData | undefined,
+  partners: ChartData | undefined
+): { text: string }[] {
+  const items: { text: string }[] = [];
+  const byKey = new Map(kpis.map((k) => [k.key, k]));
+
+  const drops = (funnel?.extra?.drops as number[] | undefined) ?? [];
+  if (funnel?.categories?.length && drops.length) {
+    let maxIdx = 1;
+    for (let i = 1; i < drops.length; i++) {
+      if ((drops[i] ?? 0) > (drops[maxIdx] ?? 0)) maxIdx = i;
+    }
+    if ((drops[maxIdx] ?? 0) > 0) {
+      const from = funnel.categories[maxIdx - 1] ?? 'prior';
+      const to = funnel.categories[maxIdx] ?? 'next';
+      items.push({
+        text: `Largest drop-off: ${from} → ${to} (${formatPct(drops[maxIdx])} lost).`,
+      });
+    }
+  }
+
+  const block = byKey.get('block_amount_paid');
+  const offerLetters = byKey.get('offer_letters');
+  if (block && offerLetters && offerLetters.current > 0) {
+    items.push({
+      text: `Offer Letter → Block conversion: ${formatPct((block.current / offerLetters.current) * 100)} (${formatNumber(block.current)} of ${formatNumber(offerLetters.current)} offer letters).`,
+    });
+  } else if (block && offerLetters && offerLetters.current === 0 && block.current > 0) {
+    items.push({
+      text: `Block amount paid: ${formatNumber(block.current)} (no offer letters in scope to convert from).`,
+    });
+  }
+
+  if (partners?.categories?.length && partners.series[0]?.data?.length) {
+    const leadData = partners.series[0].data.map((v) => Number(v) || 0);
+    const maxI = leadData.indexOf(Math.max(...leadData));
+    const minI = leadData.indexOf(Math.min(...leadData));
+    if (maxI >= 0 && minI >= 0 && maxI !== minI) {
+      items.push({
+        text: `Partner spread: ${partners.categories[maxI]} leads (${formatNumber(leadData[maxI])}) vs ${partners.categories[minI]} (${formatNumber(leadData[minI])}).`,
+      });
+    }
+  }
+
+  return items.slice(0, 5);
 }
 
 const METRIC_GROUPS = [
@@ -109,14 +173,19 @@ const METRIC_TREND_OPTIONS = [
 ] as const;
 
 export default function ExecutivePage() {
+  const router = useRouter();
   const filters = useEffectiveFilters();
   const { totalRows } = useDatasetStats();
   const setDrillDown = useAppStore((s) => s.setDrillDown);
+  const openExplorer = useLeadExplorerStore((s) => s.openExplorer);
+  const leadership = isLeadershipMode();
   const [trend, setTrend] = useState<(typeof TREND_OPTIONS)[number]['key']>('monthly_leads');
   const [metricTrend, setMetricTrend] =
     useState<(typeof METRIC_TREND_OPTIONS)[number]['key']>('leads_trend');
+  const [compareGrain, setCompareGrain] = useState<'week' | 'month'>('week');
   const [leadSearch, setLeadSearch] = useState('');
   const debouncedLeadSearch = useDebouncedValue(leadSearch, 300);
+  const hasDateRange = Boolean(filters.date_from && filters.date_to);
 
   const { data: kpis, isFetching: kpisFetching } = useFetch({
     fetcher: () => api.getExecutiveKpis(filters),
@@ -126,6 +195,16 @@ export default function ExecutivePage() {
   const { data: charts, isFetching: chartsFetching } = useFetch({
     fetcher: () => api.getExecutiveCharts(filters),
     deps: [JSON.stringify(filters)],
+  });
+
+  const { data: alerts } = useFetch({
+    fetcher: () => api.getAlerts(filters),
+    deps: [JSON.stringify(filters)],
+  });
+
+  const { data: compare, loading: compareLoading, error: compareError } = useFetch({
+    fetcher: () => api.getCompare(filters, compareGrain),
+    deps: [JSON.stringify(filters), compareGrain],
   });
 
   const chartsReady = charts != null;
@@ -138,7 +217,7 @@ export default function ExecutivePage() {
         25
       ),
     deps: [JSON.stringify(filters), debouncedLeadSearch],
-    enabled: chartsReady,
+    enabled: chartsReady && !leadership,
   });
 
   const { data: stateSummary } = useFetch({
@@ -154,6 +233,15 @@ export default function ExecutivePage() {
     () => buildBlockAmountPoints(displayCharts.partner_comparison),
     [displayCharts.partner_comparison]
   );
+  const insightItems = useMemo(
+    () =>
+      overviewInsights(
+        displayKpis,
+        displayCharts.funnel,
+        displayCharts.partner_comparison
+      ),
+    [displayKpis, displayCharts.funnel, displayCharts.partner_comparison]
+  );
   const isRefreshing = (kpisFetching || chartsFetching) && Boolean(kpis || charts);
 
   return (
@@ -161,7 +249,82 @@ export default function ExecutivePage() {
       <PageHeader title="Overview" totalRows={totalRows} />
       <FetchingHint active={isRefreshing} />
 
-      {/* PERFORMANCE — charts first, tell the story at a glance */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
+        <div className="lg:col-span-7 min-h-[200px]">
+          <InsightStrip title="What stands out" items={insightItems} />
+        </div>
+        <div className="lg:col-span-5 min-h-[200px]">
+          <AlertsPanel alerts={alerts ?? []} maxHeightClass="max-h-[280px]" />
+        </div>
+      </div>
+
+      <SectionHeader
+        title="Period compare"
+        action={
+          <div className="flex border border-border">
+            {(['week', 'month'] as const).map((g) => (
+              <button
+                key={g}
+                type="button"
+                onClick={() => setCompareGrain(g)}
+                className={
+                  'px-3 py-1 text-xs uppercase ' +
+                  (compareGrain === g
+                    ? 'bg-primary text-white'
+                    : 'bg-surface text-text-secondary hover:text-text')
+                }
+              >
+                {g === 'week' ? 'WoW' : 'MoM'}
+              </button>
+            ))}
+          </div>
+        }
+      />
+      <div className="panel grid grid-cols-2 md:grid-cols-4 gap-px bg-border">
+        {(compare?.kpis ?? []).slice(0, 4).map((k) => (
+          <div key={k.key} className="bg-surface px-3 py-3">
+            <div className="text-[10px] uppercase tracking-widest text-text-secondary">
+              {k.label}
+            </div>
+            <div className="text-base font-semibold kpi-value mt-1">
+              {formatNumber(k.current)}
+            </div>
+            <div
+              className={cn(
+                'text-[11px] font-mono mt-0.5',
+                k.change_pct > 0 && 'text-success',
+                k.change_pct < 0 && 'text-danger',
+                k.change_pct === 0 && 'text-text-secondary'
+              )}
+            >
+              {k.change_pct === 0
+                ? '—'
+                : `${k.change_pct > 0 ? '▲' : '▼'} ${Math.abs(k.change_pct).toFixed(1)}% vs prior ${compareGrain}`}
+            </div>
+            {compare?.current_from && (
+              <div className="text-[10px] text-text-secondary mt-1">
+                {compare.current_from} → {compare.current_to}
+              </div>
+            )}
+          </div>
+        ))}
+        {compareLoading && !compare?.kpis?.length && (
+          <div className="bg-surface px-3 py-3 col-span-full text-xs text-text-secondary">
+            Loading compare metrics…
+          </div>
+        )}
+        {!compareLoading && compareError && (
+          <div className="bg-surface px-3 py-3 col-span-full text-xs text-danger">
+            Could not load period compare: {compareError}
+          </div>
+        )}
+        {!compareLoading && !compareError && compare && !compare.kpis?.length && (
+          <div className="bg-surface px-3 py-3 col-span-full text-xs text-text-secondary">
+            No compare metrics for this scope.
+          </div>
+        )}
+      </div>
+
       <SectionHeader
         title="Performance"
         action={
@@ -188,10 +351,26 @@ export default function ExecutivePage() {
 
       <div className="grid grid-cols-12 gap-3">
         <div className="col-span-12 lg:col-span-5">
-          <ChartPanel chart={displayCharts.funnel} height={340} />
+          <ChartPanel
+            chart={displayCharts.funnel}
+            height={340}
+            onCategoryClick={(stage) => {
+              openExplorer(stage, FUNNEL_STAGE_LEAD_FILTERS[stage]);
+            }}
+          />
         </div>
         <div className="col-span-12 lg:col-span-7">
-          <ChartPanel chart={displayCharts.partner_comparison} height={340} />
+          <ChartPanel
+            chart={displayCharts.partner_comparison}
+            height={340}
+            onCategoryClick={(partner) => {
+              if (leadership) {
+                router.push(`/partner?partner=${encodeURIComponent(partner)}`);
+                return;
+              }
+              setDrillDown({ partner });
+            }}
+          />
         </div>
       </div>
 
@@ -247,7 +426,7 @@ export default function ExecutivePage() {
 
       <SectionHeader
         title="Block amount by partner"
-        subtitle="Summary of block amount paid"
+        subtitle="Top partners by block amount paid"
       />
       <div className="panel p-4">
         <ul className="space-y-2 text-sm text-text">
@@ -260,25 +439,37 @@ export default function ExecutivePage() {
         </ul>
       </div>
 
-      {/* KEY METRICS — supporting numbers, grouped for readability */}
-      <SectionHeader title="Key Metrics" subtitle="vs. previous period" />
+      <SectionHeader
+        title="Key Metrics"
+        subtitle={
+          hasDateRange
+            ? 'vs prior equal period'
+            : 'Set a date range (or preset) to see period-over-period deltas'
+        }
+      />
       <MetricStrip metrics={displayKpis} groups={METRIC_GROUPS} />
 
-      {/* LEAD EXPLORER */}
-      <SectionHeader title="Lead Explorer" subtitle="Click any metric box above to filter leads, or search below" />
-      <DataTable
-        data={displayLeads as unknown as Record<string, unknown>[]}
-        columns={columns}
-        onRowClick={(row) => {
-          if (row.partner) setDrillDown({ partner: String(row.partner), state: String(row.state) });
-        }}
-        exportFilename="executive_leads.csv"
-        searchPlaceholder="Search ID, name, email, phone, partner, state..."
-        searchValue={leadSearch}
-        onSearchChange={setLeadSearch}
-        totalCount={leads?.total}
-        height={360}
-      />
+      {!leadership && (
+        <>
+          <SectionHeader
+            title="Lead Explorer"
+            subtitle="Click any metric box above to filter leads, or search below"
+          />
+          <DataTable
+            data={displayLeads as unknown as Record<string, unknown>[]}
+            columns={columns}
+            onRowClick={(row) => {
+              if (row.partner) setDrillDown({ partner: String(row.partner), state: String(row.state) });
+            }}
+            exportFilename="executive_leads.csv"
+            searchPlaceholder="Search ID, name, email, phone, partner, state..."
+            searchValue={leadSearch}
+            onSearchChange={setLeadSearch}
+            totalCount={leads?.total}
+            height={360}
+          />
+        </>
+      )}
     </div>
   );
 }

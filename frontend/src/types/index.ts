@@ -125,6 +125,9 @@ export interface LeadRecord {
   application: boolean;
   admission: boolean;
   revenue?: number;
+  lead_age_days?: number;
+  device?: string;
+  last_activity_date?: string;
 }
 
 export interface UploadJob {
@@ -177,19 +180,21 @@ export interface FilterOptions {
 }
 
 export const DASHBOARD_PAGES = [
-  { id: 'executive', label: 'Overview', href: '/' },
-  { id: 'funnel', label: 'Lead Funnel', href: '/funnel' },
-  { id: 'partner', label: 'Partner Analytics', href: '/partner' },
-  { id: 'contactability', label: 'Contactability', href: '/contactability' },
-  { id: 'ai-calling', label: 'AI Calling', href: '/ai-calling' },
-  { id: 'persona', label: 'Persona', href: '/persona' },
-  { id: 'campaign', label: 'Campaign', href: '/campaign' },
-  { id: 'geographic', label: 'Geographic', href: '/geographic' },
-  { id: 'revenue', label: 'ROI', href: '/revenue' },
-  { id: 'predictive', label: 'Predictive', href: '/predictive' },
-  { id: 'block-payment', label: 'Block Payment Back tracking', href: '/block-payment' },
-  { id: 'upload', label: 'Upload Data', href: '/upload' },
+  { id: 'executive', label: 'Overview', href: '/', group: 'Pipeline' },
+  { id: 'funnel', label: 'Lead Funnel', href: '/funnel', group: 'Pipeline' },
+  { id: 'partner', label: 'Partner Analytics', href: '/partner', group: 'Pipeline' },
+  { id: 'contactability', label: 'Contactability', href: '/contactability', group: 'Ops' },
+  { id: 'ai-calling', label: 'AI Calling', href: '/ai-calling', group: 'Ops' },
+  { id: 'persona', label: 'Persona', href: '/persona', group: 'Ops' },
+  { id: 'campaign', label: 'Campaign', href: '/campaign', group: 'Ops' },
+  { id: 'geographic', label: 'Geographic', href: '/geographic', group: 'Ops' },
+  { id: 'block-payment', label: 'Block Payment', href: '/block-payment', group: 'Ops' },
+  { id: 'revenue', label: 'ROI', href: '/revenue', group: 'Forecast' },
+  { id: 'predictive', label: 'Predictive', href: '/predictive', group: 'Forecast' },
+  { id: 'upload', label: 'Upload Data', href: '/upload', group: 'Ops' },
 ] as const;
+
+export const NAV_GROUPS = ['Pipeline', 'Ops', 'Forecast'] as const;
 
 export interface PartnerCounsellorClash {
   prospect_id: string;

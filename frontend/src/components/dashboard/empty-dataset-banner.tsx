@@ -21,6 +21,8 @@ export function EmptyDatasetBanner({ totalRows = 0 }: EmptyDatasetBannerProps) {
         <div className="text-text-secondary text-sm mt-1">
           {uploadsEnabled
             ? 'Upload Excel or CSV workbooks to populate the dashboard.'
+            : process.env.NEXT_PUBLIC_DATA_MODE === 'static'
+            ? 'No published snapshot yet. Run publish_snapshots.py locally and redeploy.'
             : 'This is a view-only dashboard. Data is refreshed by an admin — check back later.'}
         </div>
       </div>

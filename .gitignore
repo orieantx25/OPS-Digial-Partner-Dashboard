@@ -6,12 +6,17 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# Data
-data/
+# Data (local DuckDB / Parquet — not for GitHub)
+/data/
 backend/data/
 *.parquet
 *.duckdb
 *.db
+
+# Leadership chart snapshots ARE committed (Vercel static mode)
+!frontend/public/data/
+!frontend/public/data/snapshots/
+!frontend/public/data/snapshots/**
 
 # Environment
 .env
@@ -22,12 +27,16 @@ backend/data/
 .idea/
 .vscode/
 *.swp
+.cursor/
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Build
+# Build / debug
 dist/
 out/
 coverage/
+*.tsbuildinfo
+backend/_*.json
+backend/_*.txt

@@ -12,7 +12,16 @@ const THEME = {
 };
 
 // upGrad red first, then distinct accents for additional series.
-const SERIES_COLORS = ['#E31E24', '#4DA3FF', '#F5A623', '#2ECC71', '#B57EDC'];
+const SERIES_COLORS = [
+  '#E31E24',
+  '#4DA3FF',
+  '#F5A623',
+  '#2ECC71',
+  '#B57EDC',
+  '#00C2A8',
+  '#F472B6',
+  '#FBBF24',
+];
 const CLASH_SERIES_COLOR = '#FBBF24';
 const CLASH_SERIES_NAME = 'Counsellor Clashes';
 const BLOCK_SERIES_NAME = 'Block Amount';
@@ -149,6 +158,7 @@ function buildLineOption(
 
   return {
     ...base,
+    color: SERIES_COLORS,
     title: { show: false },
     grid: {
       ...(base.grid as object),
@@ -168,7 +178,7 @@ function buildLineOption(
         })
       : valueYAxis(),
     series: chart.series.map((s, i) => {
-      const color = SERIES_COLORS[i % SERIES_COLORS.length];
+      const color = seriesColor(s.name, i);
       const focused = mixedScale ? i === focusedIndex : true;
       const dimmed = mixedScale && !focused;
       return {
@@ -226,6 +236,7 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
       }
       return {
         ...base,
+        color: SERIES_COLORS,
         grid: chartGrid(chart.series, { top: multi ? 56 : 44 }, chart.extra),
         tooltip: forecastStyle
           ? {
@@ -257,10 +268,10 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
                   );
                 }
 
-                const currentEntry = [...byName.entries()].find(([n]) =>
+                const currentEntry = Array.from(byName.entries()).find(([n]) =>
                   n.toLowerCase().startsWith('current')
                 );
-                const expectedEntry = [...byName.entries()].find(([n]) =>
+                const expectedEntry = Array.from(byName.entries()).find(([n]) =>
                   n.toLowerCase().startsWith('expected')
                 );
                 const currentVal = currentEntry?.[1] ?? null;
@@ -324,10 +335,13 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
         xAxis: { type: 'category', data: chart.categories, axisLine: { lineStyle: { color: '#3A3A3A' } } },
         yAxis: valueYAxis(),
         series: chart.series.map((s, i) => {
-          const isExpected = s.name.toLowerCase().startsWith('expected');
+          const isExpected = forecastStyle && s.name.toLowerCase().startsWith('expected');
+          // Forecast expected lines keep accent colors; every other series uses a unique palette color.
           const color = isExpected
-            ? (s.name.toLowerCase().includes('block') ? '#F5A623' : '#7DD3FC')
-            : SERIES_COLORS[0];
+            ? s.name.toLowerCase().includes('block')
+              ? '#F5A623'
+              : '#7DD3FC'
+            : seriesColor(s.name, i);
           return {
             name: s.name,
             type: 'line',
@@ -719,9 +733,16 @@ interface ChartPanelProps {
   chart: ChartData;
   height?: number;
   className?: string;
+  /** Fired when a category (bar/pie slice) is clicked — enables drill-down. */
+  onCategoryClick?: (category: string, index: number) => void;
 }
 
-export function ChartPanel({ chart, height = 280, className }: ChartPanelProps) {
+export function ChartPanel({
+  chart,
+  height = 280,
+  className,
+  onCategoryClick,
+}: ChartPanelProps) {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const mixedScale =
     chart.chart_type === 'line' &&
@@ -741,8 +762,25 @@ export function ChartPanel({ chart, height = 280, className }: ChartPanelProps) 
     chart.series.some((s) => s.data.length > 0) ||
     (chart.extra?.data as unknown[] | undefined)?.length;
 
+  const onEvents = useMemo(() => {
+    if (!onCategoryClick) return undefined;
+    return {
+      click: (params: { dataIndex?: number; name?: string }) => {
+        const idx =
+          typeof params.dataIndex === 'number'
+            ? params.dataIndex
+            : chart.categories.findIndex((c) => String(c) === String(params.name));
+        if (idx < 0) return;
+        const category = String(chart.categories[idx] ?? params.name ?? '');
+        if (category) onCategoryClick(category, idx);
+      },
+    };
+  }, [onCategoryClick, chart.categories]);
+
   return (
-    <div className={`panel p-3 ${className || ''}`}>
+    <div
+      className={`panel p-3 ${className || ''} ${onCategoryClick ? 'cursor-pointer' : ''}`}
+    >
       {!hasData ? (
         <div style={{ height }} className="flex flex-col">
           {chart.title ? (
@@ -793,11 +831,15 @@ export function ChartPanel({ chart, height = 280, className }: ChartPanelProps) 
               Select a metric to scale the chart — other lines stay visible for context.
             </p>
           )}
+          {onCategoryClick && (
+            <p className="text-[10px] text-text-secondary mb-1">Click a bar or slice to explore leads</p>
+          )}
           <ReactECharts
             option={option}
             style={{ height: mixedScale ? height - 48 : height }}
             opts={{ renderer: 'canvas' }}
             notMerge
+            onEvents={onEvents}
           />
         </>
       )}

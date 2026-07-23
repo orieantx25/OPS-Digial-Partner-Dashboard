@@ -43,7 +43,9 @@ Do not put LSQ keys on the public service unless you temporarily sync there as a
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| NEXT_PUBLIC_API_URL | http://localhost:8000 | Backend base URL (Railway/Render public URL in prod) |
+| NEXT_PUBLIC_DATA_MODE | (unset) | Set `static` on Vercel leadership build — loads `/data/snapshots` (no backend) |
+| NEXT_PUBLIC_LEADERSHIP_MODE | (unset) | Set `true` to hide upload, LSQ sync, lead explorer, CSV export, custom filters |
+| NEXT_PUBLIC_API_URL | http://localhost:8000 | Backend base URL (omit when `DATA_MODE=static`) |
 | NEXT_PUBLIC_AUTO_LOGIN | true (unless `false`) | Auto-login so viewers need no login form |
 | NEXT_PUBLIC_DEFAULT_USER | ops | Auto-login username |
 | NEXT_PUBLIC_DEFAULT_PASSWORD | ops123 | Auto-login password |
@@ -66,7 +68,19 @@ NEXT_PUBLIC_ENABLE_LSQ_SYNC=true
 NEXT_PUBLIC_AUTO_LOGIN=true
 ```
 
-### Public Vercel (view-only)
+### Public Vercel (static leadership — recommended)
+
+```env
+NEXT_PUBLIC_DATA_MODE=static
+NEXT_PUBLIC_LEADERSHIP_MODE=true
+NEXT_PUBLIC_ENABLE_UPLOAD=false
+NEXT_PUBLIC_ENABLE_LSQ_SYNC=false
+NEXT_PUBLIC_AUTO_LOGIN=false
+```
+
+Publish data first: `npm run publish:snapshots` then push `frontend/public/data/snapshots/`.
+
+### Public Vercel + live API (alternative)
 
 ```env
 NEXT_PUBLIC_API_URL=https://YOUR-BACKEND.up.railway.app

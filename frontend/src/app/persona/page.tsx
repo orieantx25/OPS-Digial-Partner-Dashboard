@@ -42,6 +42,7 @@ export default function PersonaPage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const { data, refetch } = useFetch({
@@ -103,6 +104,7 @@ export default function PersonaPage() {
   const last24hShare = total > 0 ? (last24h / total) * 100 : 0;
 
   const uploadsEnabled = canUpload();
+  const sheetLoaded = Boolean(activity?.has_data);
 
   const matchHint = useMemo(() => {
     if (!activity?.has_data) {
@@ -129,10 +131,21 @@ export default function PersonaPage() {
             ? 'Headers: Prospect Id, Email Address, Phone Number, Contact Name, Activity Id, Activity Date, Activity Modified On, Notes'
             : 'View-only — report is refreshed by an admin'
         }
+        action={
+          uploadsEnabled && sheetLoaded ? (
+            <button
+              type="button"
+              className="btn-secondary text-xs"
+              onClick={() => setShowUpload((v) => !v)}
+            >
+              {showUpload ? 'Hide upload' : 'Replace sheet'}
+            </button>
+          ) : undefined
+        }
       />
 
       <div className="panel p-4 space-y-3">
-        {uploadsEnabled && (
+        {uploadsEnabled && (!sheetLoaded || showUpload) && (
           <>
             <div
               className={cn(
@@ -249,7 +262,19 @@ export default function PersonaPage() {
 
       <SectionHeader
         title="Know More about B.Tech — Visual Breakdown"
-        subtitle="Overall mix · Last 24h compares Created (main DB) vs Interested (Know More about B.Tech activity events)"
+        subtitle="Overall mix · Last 24h: Created vs Interested"
+        action={
+          <span
+            className="text-[11px] text-text-secondary underline decoration-dotted cursor-help"
+            title={
+              'Persona Overall buckets (add to 100%): Offer Letter Sent → Registration → Know More Only → Other B.Tech. ' +
+              'Last 24h pie: Created = leads created in the last 24 hours (Kollege Apply included); ' +
+              'Interested = distinct leads with a Know More about B.Tech activity event in the last 24 hours.'
+            }
+          >
+            Methodology
+          </span>
+        }
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -296,13 +321,6 @@ export default function PersonaPage() {
           height={300}
         />
       </div>
-
-      <p className="text-[11px] text-text-secondary -mt-1">
-        Persona Overall buckets (add to 100%): Offer Letter Sent → Registration → Know More Only →{' '}
-        <span className="text-text">Other B.Tech (no Know More / Reg / Offer)</span>
-        . Last 24h pie: Created = leads created in the last 24 hours (Kollege Apply included); Interested =
-        distinct leads with a Know More about B.Tech activity event in the last 24 hours (Kollege Apply included).
-      </p>
 
       <SectionHeader title="Partner Breakdown" subtitle="By partner for Know More about B.Tech" />
 

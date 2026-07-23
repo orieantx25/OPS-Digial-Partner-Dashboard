@@ -1,14 +1,22 @@
 'use client';
 
 import { useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { ColumnDef } from '@tanstack/react-table';
 import { api } from '@/lib/api';
 import { useFetch } from '@/hooks/use-fetch';
-import { useEffectiveFilters } from '@/store/app-store';
+import { useAppStore, useEffectiveFilters } from '@/store/app-store';
 import { DataTable } from '@/components/tables/data-table';
+import { InsightStrip } from '@/components/dashboard/insight-strip';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { FetchingHint } from '@/components/dashboard/fetching-hint';
+import { ChartData } from '@/types';
 import { cn, formatCurrency, formatNumber } from '@/lib/utils';
+
+const ChartPanel = dynamic(
+  () => import('@/components/charts/chart-panel').then((m) => m.ChartPanel),
+  { ssr: false }
+);
 
 interface PartnerRoiRow {
   partner: string;
@@ -46,6 +54,7 @@ function statusClass(status?: string): string {
 
 export default function RoiPage() {
   const filters = useEffectiveFilters();
+  const setDrillDown = useAppStore((s) => s.setDrillDown);
 
   const { data, loading, isFetching } = useFetch({
     fetcher: () =>
@@ -56,8 +65,84 @@ export default function RoiPage() {
     deps: [JSON.stringify(filters)],
   });
 
+  const { data: goals } = useFetch({
+    fetcher: () => api.getGoals(filters),
+    deps: [JSON.stringify(filters)],
+  });
+
   const partners = data?.partners ?? [];
   const totals = data?.totals;
+
+  const insightItems = useMemo(() => {
+    const items: {
+      text: string;
+      actionLabel?: string;
+      onAction?: () => void;
+    }[] = [];
+    const below = partners
+      .filter((p) => p.status === 'Below break even')
+      .sort((a, b) => Number(b.gap_to_breakeven || 0) - Number(a.gap_to_breakeven || 0));
+    if (below.length) {
+      const top = below[0];
+      items.push({
+        text: `${below.length} partner(s) below breakeven — worst gap: ${top.partner} (${formatCurrency(Number(top.gap_to_breakeven || 0))}).`,
+        actionLabel: `Focus ${top.partner}`,
+        onAction: () => setDrillDown({ partner: top.partner }),
+      });
+    }
+    const clashes = Number(totals?.counsellor_clashes || 0);
+    if (clashes > 0) {
+      items.push({
+        text: `${formatNumber(clashes)} counsellor clash(es) excluded from Block ROI.`,
+      });
+    }
+    const behind = goals?.totals?.behind ?? 0;
+    if (behind > 0) {
+      items.push({
+        text: `${behind} partner(s) still short of breakeven block targets.`,
+      });
+    }
+    if (!items.length && partners.length) {
+      items.push({ text: 'All tracked partners are at or above breakeven on Block ROI.' });
+    }
+    return items.slice(0, 3);
+  }, [partners, totals, goals, setDrillDown]);
+
+  const statusChart: ChartData = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const p of partners) {
+      const s = p.status || 'Unknown';
+      counts[s] = (counts[s] || 0) + 1;
+    }
+    const categories = Object.keys(counts);
+    return {
+      chart_id: 'roi_status_mix',
+      chart_type: 'donut',
+      title: 'Partner status mix',
+      categories,
+      series: [{ name: 'Partners', data: categories.map((c) => counts[c]) }],
+    };
+  }, [partners]);
+
+  const gapChart: ChartData = useMemo(() => {
+    const rows = partners
+      .filter((p) => Number(p.gap_to_breakeven || 0) > 0)
+      .sort((a, b) => Number(b.gap_to_breakeven || 0) - Number(a.gap_to_breakeven || 0))
+      .slice(0, 8);
+    return {
+      chart_id: 'roi_gap_bar',
+      chart_type: 'bar',
+      title: 'Gap to breakeven (₹)',
+      categories: rows.map((r) => r.partner),
+      series: [
+        {
+          name: 'Gap',
+          data: rows.map((r) => Number(r.gap_to_breakeven || 0)),
+        },
+      ],
+      extra: { horizontal: true },
+    };
+  }, [partners]);
 
   const columns: ColumnDef<PartnerRoiRow>[] = useMemo(
     () => [
@@ -184,6 +269,15 @@ export default function RoiPage() {
     []
   );
 
+  const goalColumns: ColumnDef<Record<string, unknown>>[] = [
+    { accessorKey: 'partner', header: 'Partner' },
+    { accessorKey: 'block_roi', header: 'Block ROI' },
+    { accessorKey: 'target_blocks', header: 'Target blocks' },
+    { accessorKey: 'gap_blocks', header: 'Gap' },
+    { accessorKey: 'progress_pct', header: 'Progress %' },
+    { accessorKey: 'status', header: 'Status' },
+  ];
+
   return (
     <div className={cn('space-y-4', isFetching && data && 'opacity-90')}>
       <PageHeader title="ROI" />
@@ -193,6 +287,8 @@ export default function RoiPage() {
         <FetchingHint active={isFetching} />
       )}
 
+      <InsightStrip title="ROI insights" items={insightItems} />
+
       <SectionHeader
         title="Partner ROI Overview"
         subtitle="Cost = Advance + (Incentive × Block ROI) · Revenue = ₹5.5L × Block ROI · Break even when Revenue ≥ Cost · College Wollege is advance-only"
@@ -200,7 +296,7 @@ export default function RoiPage() {
 
       {!totals?.has_clash_sheet && (
         <p className="text-xs text-amber-400 panel p-3">
-          Upload the block amount paid sheet on Block Payment Back tracking to exclude counsellor
+          Upload the block amount paid sheet on Block Payment to exclude counsellor
           clashes from ROI. Until then, all block paid counts are used as the admission proxy.
         </p>
       )}
@@ -246,6 +342,26 @@ export default function RoiPage() {
           </div>
         ))}
       </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <ChartPanel chart={statusChart} height={260} />
+        <ChartPanel
+          chart={gapChart}
+          height={260}
+          onCategoryClick={(partner) => setDrillDown({ partner })}
+        />
+      </div>
+
+      <SectionHeader
+        title="Progress to breakeven targets"
+        subtitle="Target blocks = advance recovery from Block ROI economics"
+      />
+      <DataTable
+        data={(goals?.partners ?? []) as Record<string, unknown>[]}
+        columns={goalColumns}
+        exportFilename="roi_goals.csv"
+        height={240}
+      />
 
       <SectionHeader title="Partner Breakeven & ROI" />
       <DataTable

@@ -1,5 +1,50 @@
 # Deployment
 
+## Leadership dashboard on Vercel (no hosted DB) — recommended
+
+Leadership viewers get a **static Next.js** app on Vercel. Charts load from JSON snapshots under `frontend/public/data/snapshots/`. There is **no FastAPI / DuckDB / SQLite** on Vercel.
+
+| Who | Where | What they do |
+|-----|--------|----------------|
+| You (ops) | Local PC | Upload sheets, Sync LSQ, explore lead lists |
+| Leadership | Vercel URL | Summary charts only; frozen until you republish |
+
+### Day-to-day publish loop
+
+1. Locally: upload / Sync LSQ as usual (`uvicorn` + `npm run dev`).
+2. Publish snapshots:
+
+```bash
+npm run publish:snapshots
+# or: python backend/scripts/publish_snapshots.py
+```
+
+3. Commit and push `frontend/public/data/snapshots/` (JSON only — do **not** commit `backend/data/*.parquet` or `.env`).
+4. Vercel rebuilds from `frontend/` Root Directory.
+
+### Vercel project settings
+
+- **Root Directory:** `frontend`
+- **Framework:** Next.js
+- Env vars — copy from [`frontend/.env.vercel.example`](../frontend/.env.vercel.example):
+
+```env
+NEXT_PUBLIC_DATA_MODE=static
+NEXT_PUBLIC_LEADERSHIP_MODE=true
+NEXT_PUBLIC_ENABLE_UPLOAD=false
+NEXT_PUBLIC_ENABLE_LSQ_SYNC=false
+NEXT_PUBLIC_AUTO_LOGIN=false
+```
+
+Do **not** set `NEXT_PUBLIC_API_URL` in this mode (API rewrites are disabled).
+
+### What leadership can / cannot do
+
+- **Can:** date presets (All time / Last 7d / MTD / 30d / This month), Daily/Weekly/Monthly chart toggles, Partner Analytics click → partner detail.
+- **Cannot:** upload, Sync LSQ, Lead Explorer / row search, CSV export, custom filter combinations outside published presets.
+
+---
+
 ## Docker Compose (local / single host)
 
 ```bash
@@ -12,9 +57,9 @@ Services:
 
 Data persisted in `dp-data` Docker volume.
 
-## Share view-only dashboard (recommended for team links)
+## Alternative: live API behind Vercel (Railway / Render)
 
-Public viewers get a **Vercel** frontend with Upload / Sync LSQ hidden. Charts still need a live API that reads Parquet + DuckDB — host that on **Railway** or **Render** (no AWS required). Default host in this guide: **Railway**.
+If you need full custom filters on the public URL, host FastAPI + Parquet/DuckDB on Railway/Render and point Vercel at it (view-only flags, no static mode). See below.
 
 | Layer | Where | Role |
 |-------|--------|------|

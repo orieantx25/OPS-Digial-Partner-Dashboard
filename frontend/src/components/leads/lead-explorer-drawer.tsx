@@ -68,7 +68,7 @@ export function LeadExplorerDrawer() {
             </div>
           ) : (
             <DataTable
-              data={(data?.items ?? []) as Record<string, unknown>[]}
+              data={(data?.items ?? []) as unknown as Record<string, unknown>[]}
               columns={columns}
               exportFilename={`leads-${filterKey || 'all'}.csv`}
               searchPlaceholder="Search ID, name, email, phone, partner, state..."

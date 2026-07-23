@@ -202,6 +202,7 @@ class AnalyticsEngine:
             "applications": f"{p}application",
             "test_registrations": f"{p}test_registration",
             "offer_letters": f"{p}offer_letter",
+            "interview": f"{p}interview" if "interview" in available else "FALSE",
             "block_amount_paid": f"{p}block_amount_paid",
             "admissions": f"{p}admission",
             "never_dialed": f"({leads_not_touched})",
@@ -261,11 +262,11 @@ class AnalyticsEngine:
         params: List[Any] = []
 
         if filters.date_from:
-            clauses.append(f"{prefix}date >= ?")
-            params.append(filters.date_from)
+            clauses.append(f"CAST({prefix}date AS DATE) >= CAST(? AS DATE)")
+            params.append(str(filters.date_from)[:10])
         if filters.date_to:
-            clauses.append(f"{prefix}date <= ?")
-            params.append(filters.date_to)
+            clauses.append(f"CAST({prefix}date AS DATE) <= CAST(? AS DATE)")
+            params.append(str(filters.date_to)[:10])
         if filters.week:
             clauses.append(f"{prefix}week = ?")
             params.append(filters.week)
@@ -1874,11 +1875,17 @@ class AnalyticsEngine:
             }
             for r in contact_stage_rows
         ]
+        daily = self.get_time_series_chart(pf, "daily")
+        weekly = self.get_time_series_chart(pf, "weekly")
+        monthly = self.get_time_series_chart(pf, "monthly")
         return {
             "partner": partner,
             "overview": overview[0] if overview else {},
             "top_states": states,
             "trend": trend,
+            "daily_leads": daily.model_dump() if hasattr(daily, "model_dump") else daily,
+            "weekly_leads": weekly.model_dump() if hasattr(weekly, "model_dump") else weekly,
+            "monthly_leads": monthly.model_dump() if hasattr(monthly, "model_dump") else monthly,
             "block_amount_leads": block_amount_leads,
             "contact_stage_summary": contact_stage_summary,
             "block_counsellor_clashes": self._get_partner_counsellor_clashes(
@@ -2111,11 +2118,19 @@ class AnalyticsEngine:
             )
             or 0
         )
+        available = set(self.duck_repo.get_master_columns())
+        optional_cols = [
+            c
+            for c in ("lead_age_days", "device", "last_activity_date")
+            if c in available
+        ]
+        extra_select = (", " + ", ".join(optional_cols)) if optional_cols else ""
         rows = self.duck_repo.query_dicts(
             f"""
             SELECT prospect_id, name, email, phone, partner, state, city,
                    lead_stage, contact_stage, funnel_stage, date, total_dialed_count,
                    connected, mql, sql, application, admission, revenue
+                   {extra_select}
             FROM {MASTER_DATASET_TABLE}
             {where}
             ORDER BY date DESC NULLS LAST
@@ -2140,6 +2155,31 @@ class AnalyticsEngine:
         kpis = self.get_executive_kpis(filters)
         kpi_map = {k.key: k for k in kpis}
 
+        def _kpi_drop(
+            key: str,
+            threshold: float,
+            alert_type: str,
+            title: str,
+            severity: str = "warning",
+        ) -> None:
+            metric = kpi_map.get(key)
+            if metric and metric.change_pct <= -threshold:
+                alerts.append(
+                    AlertItem(
+                        alert_type=alert_type,
+                        severity=severity,
+                        title=title,
+                        message=(
+                            f"{metric.label} down {abs(metric.change_pct):.1f}% "
+                            f"vs prior equal period "
+                            f"({metric.previous:.0f} → {metric.current:.0f})"
+                        ),
+                        metric_value=metric.current,
+                        threshold=metric.previous,
+                        created_at=now,
+                    )
+                )
+
         contactability = kpi_map.get("contactability")
         if contactability and contactability.change_pct < -5:
             alerts.append(
@@ -2150,6 +2190,18 @@ class AnalyticsEngine:
                     message=f"Contactability dropped {abs(contactability.change_pct):.2f}%",
                     metric_value=contactability.current,
                     threshold=contactability.previous,
+                    created_at=now,
+                )
+            )
+        if contactability and contactability.current < 15:
+            alerts.append(
+                AlertItem(
+                    alert_type="contactability_low",
+                    severity="danger",
+                    title="Contactability critically low",
+                    message=f"Only {contactability.current:.1f}% of leads are contactable in this scope",
+                    metric_value=contactability.current,
+                    threshold=15.0,
                     created_at=now,
                 )
             )
@@ -2166,6 +2218,91 @@ class AnalyticsEngine:
                     created_at=now,
                 )
             )
+
+        _kpi_drop("block_amount_paid", 10, "block_amount_drop", "Block amount paid down")
+        _kpi_drop("connected", 10, "connected_drop", "Connected leads down")
+        _kpi_drop("mql", 10, "mql_drop", "MQL down")
+        _kpi_drop("applications", 15, "applications_drop", "Applications down", "danger")
+        _kpi_drop("offer_letters", 15, "offer_letter_drop", "Offer letters down")
+
+        total_leads = kpi_map.get("total_leads")
+        never_dialed = kpi_map.get("never_dialed")
+        if total_leads and never_dialed and total_leads.current > 0:
+            share = never_dialed.current / total_leads.current * 100
+            if share >= 40:
+                alerts.append(
+                    AlertItem(
+                        alert_type="never_dialed_high",
+                        severity="warning",
+                        title="High untouched share",
+                        message=(
+                            f"{share:.0f}% of leads ({never_dialed.current:.0f}) "
+                            f"are still not touched / never dialed"
+                        ),
+                        metric_value=share,
+                        threshold=40.0,
+                        created_at=now,
+                    )
+                )
+
+        dnp = kpi_map.get("dnp_pct")
+        if dnp and dnp.current >= 35:
+            alerts.append(
+                AlertItem(
+                    alert_type="dnp_high",
+                    severity="warning",
+                    title="High DNP rate",
+                    message=f"DNP is {dnp.current:.1f}% in the current scope",
+                    metric_value=dnp.current,
+                    threshold=35.0,
+                    created_at=now,
+                )
+            )
+
+        block = kpi_map.get("block_amount_paid")
+        if total_leads and block and total_leads.current >= 100:
+            block_rate = block.current / total_leads.current * 100
+            if block_rate < 0.5:
+                alerts.append(
+                    AlertItem(
+                        alert_type="block_conversion_low",
+                        severity="warning",
+                        title="Low block conversion",
+                        message=(
+                            f"Only {block_rate:.2f}% of leads reached Block Amount Paid "
+                            f"({block.current:.0f} / {total_leads.current:.0f})"
+                        ),
+                        metric_value=block_rate,
+                        threshold=0.5,
+                        created_at=now,
+                    )
+                )
+
+        # Funnel: flag largest stage-to-stage drop when severe.
+        funnel = self.get_funnel_data(filters)
+        drops = (funnel.extra or {}).get("drops") or []
+        if funnel.categories and drops:
+            max_i = 1
+            for i in range(1, len(drops)):
+                if float(drops[i] or 0) > float(drops[max_i] or 0):
+                    max_i = i
+            max_drop = float(drops[max_i] or 0) if max_i < len(drops) else 0.0
+            if max_drop >= 70 and max_i > 0:
+                from_stage = funnel.categories[max_i - 1]
+                to_stage = funnel.categories[max_i]
+                alerts.append(
+                    AlertItem(
+                        alert_type="funnel_dropoff",
+                        severity="warning",
+                        title="Severe funnel drop-off",
+                        message=(
+                            f"{from_stage} → {to_stage}: {max_drop:.0f}% drop in current scope"
+                        ),
+                        metric_value=max_drop,
+                        threshold=70.0,
+                        created_at=now,
+                    )
+                )
 
         partners = self.get_partner_comparison(filters)
         if partners.series and partners.series[0].data:
@@ -2184,6 +2321,28 @@ class AnalyticsEngine:
                             created_at=now,
                         )
                     )
+
+            block_totals = (partners.extra or {}).get("block_amount_total") or []
+            zero_block = [
+                str(partners.categories[i])
+                for i, total in enumerate(block_totals)
+                if int(total or 0) == 0
+            ]
+            if zero_block:
+                sample = ", ".join(zero_block[:3])
+                more = (
+                    f" (+{len(zero_block) - 3} more)" if len(zero_block) > 3 else ""
+                )
+                alerts.append(
+                    AlertItem(
+                        alert_type="partner_zero_block",
+                        severity="info",
+                        title="Partners with zero block",
+                        message=f"{len(zero_block)} partner(s) have no block amount paid: {sample}{more}",
+                        metric_value=float(len(zero_block)),
+                        created_at=now,
+                    )
+                )
 
         stats = self.get_dataset_stats()
         if stats["has_data"]:
@@ -2222,7 +2381,555 @@ class AnalyticsEngine:
                 created_at=now,
             )
         )
-        return alerts
+
+        # Merge richer anomaly signals into the same feed.
+        for item in self.get_anomalies(filters):
+            alerts.append(item)
+
+        # Severity-first, then keep the feed readable.
+        severity_rank = {"danger": 0, "warning": 1, "info": 2}
+        alerts.sort(key=lambda a: (severity_rank.get(a.severity, 9), a.title))
+        return alerts[:24]
+
+    def _calendar_period_filters(
+        self, filters: FilterParams, grain: str
+    ) -> Tuple[FilterParams, FilterParams, str]:
+        """Current vs prior calendar week/month windows (ignores custom date_from/to for grain)."""
+        today = datetime.utcnow().date()
+        data = filters.model_dump()
+        if grain == "month":
+            cur_start = today.replace(day=1)
+            if cur_start.month == 1:
+                prev_start = cur_start.replace(year=cur_start.year - 1, month=12)
+            else:
+                prev_start = cur_start.replace(month=cur_start.month - 1)
+            prev_end = cur_start - timedelta(days=1)
+            cur_end = today
+            label = "month"
+        else:
+            # ISO week: Monday start
+            cur_start = today - timedelta(days=today.weekday())
+            cur_end = today
+            prev_end = cur_start - timedelta(days=1)
+            prev_start = prev_end - timedelta(days=6)
+            label = "week"
+
+        base = {
+            k: v
+            for k, v in data.items()
+            if v is not None
+            and k
+            not in ("date_from", "date_to", "month", "year", "week", "quarter")
+        }
+        current = FilterParams(
+            **{
+                **base,
+                "date_from": cur_start.strftime("%Y-%m-%d"),
+                "date_to": cur_end.strftime("%Y-%m-%d"),
+            }
+        )
+        previous = FilterParams(
+            **{
+                **base,
+                "date_from": prev_start.strftime("%Y-%m-%d"),
+                "date_to": prev_end.strftime("%Y-%m-%d"),
+            }
+        )
+        return current, previous, label
+
+    def _kpi_snapshot(self, filters: FilterParams) -> Dict[str, float]:
+        """Lightweight counts for period compare (no nested prior window / trends)."""
+        where, params = self._build_where(filters)
+        available = set(self.duck_repo.get_master_columns())
+
+        def flag(col: str) -> str:
+            return (
+                f"SUM(CASE WHEN {col} THEN 1 ELSE 0 END)"
+                if col in available
+                else "0"
+            )
+
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                COUNT(*) AS total_leads,
+                {flag("connected")} AS connected,
+                {flag("mql")} AS mql,
+                {flag("application")} AS applications,
+                {flag("block_amount_paid")} AS block_amount_paid,
+                {flag("admission")} AS admissions
+            FROM {MASTER_DATASET_TABLE}
+            {where}
+            """,
+            params,
+        )
+        cur = rows[0] if rows else {}
+        total = float(cur.get("total_leads") or 0)
+        connected = float(cur.get("connected") or 0)
+        return {
+            "total_leads": total,
+            "connected": connected,
+            "mql": float(cur.get("mql") or 0),
+            "applications": float(cur.get("applications") or 0),
+            "block_amount_paid": float(cur.get("block_amount_paid") or 0),
+            "admissions": float(cur.get("admissions") or 0),
+            "contactability": (connected / total * 100.0) if total else 0.0,
+        }
+
+    def get_period_compare(
+        self, filters: FilterParams, grain: str = "week"
+    ) -> Dict[str, Any]:
+        if not self._has_data():
+            return {"grain": grain, "kpis": [], "funnel_rates": []}
+
+        grain = "month" if grain == "month" else "week"
+        current_f, previous_f, label = self._calendar_period_filters(filters, grain)
+        cur = self._kpi_snapshot(current_f)
+        prev = self._kpi_snapshot(previous_f)
+
+        labels = {
+            "total_leads": "Total Leads",
+            "connected": "Connected",
+            "mql": "MQL",
+            "applications": "Applications",
+            "block_amount_paid": "Block Amount Paid",
+            "admissions": "Admissions",
+            "contactability": "Contactability %",
+        }
+        out_kpis: List[Dict[str, Any]] = []
+        for key, label_txt in labels.items():
+            cur_val = float(cur.get(key) or 0)
+            prev_val = float(prev.get(key) or 0)
+            change = (
+                round((cur_val - prev_val) / prev_val * 100, 2) if prev_val else 0.0
+            )
+            out_kpis.append(
+                {
+                    "key": key,
+                    "label": label_txt,
+                    "current": cur_val,
+                    "previous": prev_val,
+                    "change_pct": change,
+                }
+            )
+
+        return {
+            "grain": label,
+            "current_from": current_f.date_from,
+            "current_to": current_f.date_to,
+            "previous_from": previous_f.date_from,
+            "previous_to": previous_f.date_to,
+            "kpis": out_kpis,
+            "funnel_rates": [],
+        }
+
+    def get_funnel_trends(self, filters: FilterParams) -> ChartData:
+        if not self._has_data():
+            return empty_chart("funnel_trends", "line", "Funnel Conversion Trends")
+
+        where, params = self._build_where(filters)
+        available = set(self.duck_repo.get_master_columns())
+        stage_cols = [
+            ("connected", "Connected"),
+            ("mql", "MQL"),
+            ("application", "Application"),
+            ("block_amount_paid", "Block Amount"),
+            ("admission", "Admission"),
+        ]
+        select_parts = ["month", "COUNT(*) AS leads"]
+        for col, _label in stage_cols:
+            if col in available:
+                select_parts.append(
+                    f"SUM(CASE WHEN {col} THEN 1 ELSE 0 END) AS {col}"
+                )
+            else:
+                select_parts.append(f"0 AS {col}")
+
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT {', '.join(select_parts)}
+            FROM {MASTER_DATASET_TABLE}
+            {where}
+            {"AND" if where else "WHERE"} month IS NOT NULL AND TRIM(CAST(month AS VARCHAR)) <> ''
+            GROUP BY month
+            ORDER BY month
+            """,
+            params,
+        )
+
+        categories = [str(r["month"]) for r in rows]
+        series: List[ChartSeries] = []
+        for col, label in stage_cols:
+            rates: List[float] = []
+            for r in rows:
+                leads = int(r.get("leads") or 0)
+                cnt = int(r.get(col) or 0)
+                rates.append(round(cnt / leads * 100, 2) if leads else 0.0)
+            series.append(ChartSeries(name=f"{label} %", data=rates))
+
+        return ChartData(
+            chart_id="funnel_trends",
+            chart_type="line",
+            title="Monthly Funnel Conversion % (of leads)",
+            categories=categories,
+            series=series,
+        )
+
+    def get_conversion_rates(self, filters: FilterParams) -> Dict[str, Any]:
+        if not self._has_data():
+            return {"by_partner": [], "by_campaign": []}
+
+        where, params = self._build_where(filters)
+        available = set(self.duck_repo.get_master_columns())
+
+        def flag(col: str) -> str:
+            return (
+                f"SUM(CASE WHEN {col} THEN 1 ELSE 0 END)"
+                if col in available
+                else "0"
+            )
+
+        partner_rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT partner,
+                   COUNT(*) AS leads,
+                   {flag("connected")} AS connected,
+                   {flag("mql")} AS mql,
+                   {flag("application")} AS applications,
+                   {flag("block_amount_paid")} AS block_amount_paid,
+                   {flag("admission")} AS admissions
+            FROM {MASTER_DATASET_TABLE}
+            {where}
+            {"AND" if where else "WHERE"} partner IS NOT NULL
+            GROUP BY partner
+            ORDER BY leads DESC
+            """,
+            params,
+        )
+
+        def rate(n: int, d: int) -> float:
+            return round(n / d * 100, 2) if d else 0.0
+
+        by_partner = []
+        for r in partner_rows:
+            leads = int(r.get("leads") or 0)
+            block = int(r.get("block_amount_paid") or 0)
+            adm = int(r.get("admissions") or 0)
+            by_partner.append(
+                {
+                    "partner": r.get("partner"),
+                    "leads": leads,
+                    "connected": int(r.get("connected") or 0),
+                    "mql": int(r.get("mql") or 0),
+                    "applications": int(r.get("applications") or 0),
+                    "block_amount_paid": block,
+                    "admissions": adm,
+                    "lead_to_block_pct": rate(block, leads),
+                    "lead_to_admission_pct": rate(adm, leads),
+                    "connected_pct": rate(int(r.get("connected") or 0), leads),
+                }
+            )
+
+        campaign_select = "COALESCE(campaign, '(blank)') AS campaign"
+        if "campaign" not in available:
+            return {"by_partner": by_partner, "by_campaign": []}
+
+        campaign_rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT {campaign_select},
+                   COALESCE(partner, '(blank)') AS partner,
+                   COUNT(*) AS leads,
+                   {flag("block_amount_paid")} AS block_amount_paid,
+                   {flag("admission")} AS admissions
+            FROM {MASTER_DATASET_TABLE}
+            {where}
+            GROUP BY campaign, partner
+            ORDER BY leads DESC
+            LIMIT 40
+            """,
+            params,
+        )
+        by_campaign = []
+        for r in campaign_rows:
+            leads = int(r.get("leads") or 0)
+            block = int(r.get("block_amount_paid") or 0)
+            adm = int(r.get("admissions") or 0)
+            by_campaign.append(
+                {
+                    "campaign": r.get("campaign"),
+                    "partner": r.get("partner"),
+                    "leads": leads,
+                    "block_amount_paid": block,
+                    "admissions": adm,
+                    "lead_to_block_pct": rate(block, leads),
+                    "lead_to_admission_pct": rate(adm, leads),
+                }
+            )
+
+        return {"by_partner": by_partner, "by_campaign": by_campaign}
+
+    def get_cohorts(
+        self, filters: FilterParams, by: str = "month"
+    ) -> Dict[str, Any]:
+        if not self._has_data():
+            return {"by": by, "cohorts": []}
+
+        grain = "week" if by == "week" else "month"
+        group_col = "week" if grain == "week" else "month"
+        where, params = self._build_where(filters)
+        available = set(self.duck_repo.get_master_columns())
+        age_expr = (
+            "AVG(lead_age_days)" if "lead_age_days" in available else "NULL"
+        )
+
+        def flag(col: str) -> str:
+            return (
+                f"SUM(CASE WHEN {col} THEN 1 ELSE 0 END)"
+                if col in available
+                else "0"
+            )
+
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT {group_col} AS cohort,
+                   COUNT(*) AS leads,
+                   {age_expr} AS avg_age_days,
+                   {flag("connected")} AS connected,
+                   {flag("mql")} AS mql,
+                   {flag("block_amount_paid")} AS block_amount_paid,
+                   {flag("admission")} AS admissions
+            FROM {MASTER_DATASET_TABLE}
+            {where}
+            {"AND" if where else "WHERE"} {group_col} IS NOT NULL
+              AND TRIM(CAST({group_col} AS VARCHAR)) <> ''
+            GROUP BY {group_col}
+            ORDER BY {group_col} DESC
+            LIMIT 24
+            """,
+            params,
+        )
+
+        cohorts = []
+        for r in rows:
+            leads = int(r.get("leads") or 0)
+            block = int(r.get("block_amount_paid") or 0)
+            connected = int(r.get("connected") or 0)
+            cohorts.append(
+                {
+                    "cohort": str(r.get("cohort")),
+                    "leads": leads,
+                    "avg_age_days": (
+                        round(float(r["avg_age_days"]), 1)
+                        if r.get("avg_age_days") is not None
+                        else None
+                    ),
+                    "connected": connected,
+                    "connected_pct": round(connected / leads * 100, 2) if leads else 0,
+                    "mql": int(r.get("mql") or 0),
+                    "block_amount_paid": block,
+                    "block_pct": round(block / leads * 100, 2) if leads else 0,
+                    "admissions": int(r.get("admissions") or 0),
+                }
+            )
+
+        return {"by": grain, "cohorts": cohorts}
+
+    def get_block_payment_attribution(
+        self, filters: FilterParams
+    ) -> Dict[str, Any]:
+        """Aggregate payment-sheet UTMs / coupon / campus (no master date filters)."""
+        try:
+            n = int(
+                self.duck_repo.execute_scalar(
+                    f"SELECT COUNT(*) FROM {BLOCK_PAYMENT_TABLE}"
+                )
+                or 0
+            )
+        except Exception:
+            n = 0
+        if n <= 0:
+            return {
+                "has_sheet": False,
+                "row_count": 0,
+                "by_source_at_payment": [],
+                "by_campaign_at_payment": [],
+                "by_coupon": [],
+                "by_college": [],
+                "by_original_utm_campaign": [],
+            }
+
+        def top(col: str, limit: int = 15) -> List[Dict[str, Any]]:
+            try:
+                rows = self.duck_repo.query_dicts(
+                    f"""
+                    SELECT COALESCE(NULLIF(TRIM(CAST({col} AS VARCHAR)), ''), '(blank)') AS label,
+                           COUNT(*) AS cnt
+                    FROM {BLOCK_PAYMENT_TABLE}
+                    GROUP BY 1
+                    ORDER BY cnt DESC
+                    LIMIT ?
+                    """,
+                    [limit],
+                )
+            except Exception:
+                return []
+            return [
+                {"label": r.get("label"), "count": int(r.get("cnt") or 0)}
+                for r in rows
+            ]
+
+        return {
+            "has_sheet": True,
+            "row_count": n,
+            "by_source_at_payment": top("source_at_payment"),
+            "by_campaign_at_payment": top("campaign_at_payment"),
+            "by_coupon": top("coupon_code_used"),
+            "by_college": top("college_name"),
+            "by_original_utm_campaign": top("original_utm_campaign"),
+        }
+
+    def get_anomalies(self, filters: FilterParams) -> List[AlertItem]:
+        """Weekly partner lead / contactability swings beyond simple MoM thresholds."""
+        if not self._has_data():
+            return []
+
+        alerts: List[AlertItem] = []
+        now = datetime.utcnow()
+        where, params = self._build_where(filters)
+        available = set(self.duck_repo.get_master_columns())
+        if "week" not in available:
+            return alerts
+
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT partner, week, COUNT(*) AS leads,
+                   SUM(CASE WHEN connected THEN 1 ELSE 0 END) AS connected
+            FROM {MASTER_DATASET_TABLE}
+            {where}
+            {"AND" if where else "WHERE"} partner IS NOT NULL AND week IS NOT NULL
+            GROUP BY partner, week
+            ORDER BY partner, week
+            """,
+            params,
+        )
+        by_partner: Dict[str, List[Dict[str, Any]]] = {}
+        for r in rows:
+            by_partner.setdefault(str(r["partner"]), []).append(r)
+
+        for partner, series in by_partner.items():
+            if len(series) < 4:
+                continue
+            leads = [int(x.get("leads") or 0) for x in series]
+            mean = sum(leads[:-1]) / max(1, len(leads) - 1)
+            if mean <= 0:
+                continue
+            latest = leads[-1]
+            # Flag when latest week is <50% or >200% of trailing mean.
+            if latest < mean * 0.5:
+                alerts.append(
+                    AlertItem(
+                        alert_type="anomaly_partner_leads_low",
+                        severity="warning",
+                        title=f"{partner}: low weekly leads",
+                        message=(
+                            f"Latest week {latest} vs avg {mean:.0f} "
+                            f"({(latest / mean - 1) * 100:.0f}%)"
+                        ),
+                        metric_value=float(latest),
+                        threshold=mean,
+                        created_at=now,
+                    )
+                )
+            elif latest > mean * 2:
+                alerts.append(
+                    AlertItem(
+                        alert_type="anomaly_partner_leads_high",
+                        severity="info",
+                        title=f"{partner}: spike in weekly leads",
+                        message=(
+                            f"Latest week {latest} vs avg {mean:.0f} "
+                            f"(+{(latest / mean - 1) * 100:.0f}%)"
+                        ),
+                        metric_value=float(latest),
+                        threshold=mean,
+                        created_at=now,
+                    )
+                )
+
+            contact = []
+            for x in series:
+                L = int(x.get("leads") or 0)
+                C = int(x.get("connected") or 0)
+                contact.append((C / L * 100) if L else 0.0)
+            if len(contact) >= 4:
+                c_mean = sum(contact[:-1]) / (len(contact) - 1)
+                c_latest = contact[-1]
+                if c_mean > 5 and c_latest < c_mean - 15:
+                    alerts.append(
+                        AlertItem(
+                            alert_type="anomaly_contactability",
+                            severity="warning",
+                            title=f"{partner}: contactability dip",
+                            message=(
+                                f"Weekly contactability {c_latest:.1f}% "
+                                f"vs avg {c_mean:.1f}%"
+                            ),
+                            metric_value=c_latest,
+                            threshold=c_mean,
+                            created_at=now,
+                        )
+                    )
+
+        return alerts[:12]
+
+    def get_goals(self, filters: FilterParams) -> Dict[str, Any]:
+        """Breakeven block targets from PARTNER_COMMERCIALS vs actual Block ROI."""
+        import math
+
+        revenue = self.get_revenue_dashboard(filters)
+        partners_out = []
+        for p in revenue.get("partners") or []:
+            if p.get("cost") is None:
+                continue
+            advance = float(p.get("advance") or 0)
+            incentive = float(p.get("incentive_per_admission") or 0)
+            advance_only = bool(p.get("advance_only"))
+            block_roi = int(p.get("block_amount_roi") or 0)
+            rev_per = float(
+                p.get("revenue_per_admission") or self.REVENUE_PER_ADMISSION_INR
+            )
+            if advance_only or incentive <= 0:
+                # Advance recovered when revenue covers advance.
+                contribution = rev_per
+                target_blocks = (
+                    int(math.ceil(advance / contribution)) if contribution > 0 else 0
+                )
+            else:
+                contribution = rev_per - incentive
+                target_blocks = (
+                    int(math.ceil(advance / contribution)) if contribution > 0 else 0
+                )
+            progress = (
+                round(block_roi / target_blocks * 100, 1) if target_blocks else 100.0
+            )
+            partners_out.append(
+                {
+                    "partner": p.get("partner"),
+                    "block_roi": block_roi,
+                    "target_blocks": target_blocks,
+                    "progress_pct": min(progress, 999.0),
+                    "gap_blocks": max(0, target_blocks - block_roi),
+                    "status": p.get("status"),
+                }
+            )
+
+        return {
+            "partners": partners_out,
+            "totals": {
+                "on_track": sum(1 for p in partners_out if p["gap_blocks"] <= 0),
+                "behind": sum(1 for p in partners_out if p["gap_blocks"] > 0),
+            },
+        }
 
     def get_heatmap_data(self, filters: FilterParams) -> ChartData:
         where, params = self._build_where(filters)

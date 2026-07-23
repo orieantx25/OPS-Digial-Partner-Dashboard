@@ -461,12 +461,21 @@ class IngestionEngine:
     def _read_raw_dataframe(self, filename: str, content: bytes) -> pl.DataFrame:
         ext = Path(filename).suffix.lower()
         if ext == ".csv":
-            return pl.read_csv(
-                io.BytesIO(content),
-                infer_schema_length=10000,
-                ignore_errors=True,
-                truncate_ragged_lines=True,
-            )
+            try:
+                return pl.read_csv(
+                    io.BytesIO(content),
+                    infer_schema_length=None,
+                    ignore_errors=True,
+                    truncate_ragged_lines=True,
+                )
+            except Exception as exc:
+                logger.warning("csv_infer_all_failed_retry_utf8", error=str(exc))
+                return pl.read_csv(
+                    io.BytesIO(content),
+                    infer_schema_length=0,
+                    ignore_errors=True,
+                    truncate_ragged_lines=True,
+                )
         if ext in (".xlsx", ".xls"):
             return self._read_excel(content)
         raise ValueError(f"Unsupported extension: {ext}")

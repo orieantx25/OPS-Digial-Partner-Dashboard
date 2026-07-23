@@ -60,6 +60,33 @@ def test_map_leads_prospect_stage_is_crm_contact_stage():
     assert df.get_column("lead_stage")[0] == "Offer Letter Released"
 
 
+def test_map_leads_mixed_types_do_not_crash():
+    """Numeric-looking early rows must not break when a later value is a name."""
+    leads = [
+        {
+            "ProspectID": "1",
+            "FirstName": "Ada",
+            "LastName": "Lovelace",
+            "EmailAddress": "ada@example.com",
+            "Source": "Careers360",
+            "CreatedOn": "2025-01-15 10:00:00",
+            "mx_City": 110001,
+        },
+        {
+            "ProspectID": "2",
+            "FirstName": "MOYLI",
+            "LastName": "P R",
+            "EmailAddress": "moyli@example.com",
+            "Source": "College Hai",
+            "CreatedOn": "2025-01-16 10:00:00",
+            "mx_City": "MOYLI P R",
+        },
+    ]
+    df = map_leads_to_dataframe(leads)
+    assert df.height == 2
+    assert "MOYLI" in str(df.get_column("name")[1])
+
+
 def test_map_activities_to_dataframe():
     activities = [
         {

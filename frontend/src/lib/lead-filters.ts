@@ -9,6 +9,7 @@ export const KPI_LEAD_FILTERS: Record<string, string | undefined> = {
   applications: 'applications',
   test_registrations: 'test_registrations',
   offer_letters: 'offer_letters',
+  interview: 'interview',
   block_amount_paid: 'block_amount_paid',
   admissions: 'admissions',
   contactability: 'connected',

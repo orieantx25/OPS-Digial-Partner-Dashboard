@@ -24,6 +24,8 @@ npm run publish:snapshots
 
 ### Vercel project settings
 
+See the short checklist: [`frontend/VERCEL.md`](../frontend/VERCEL.md).
+
 - **Root Directory:** `frontend`
 - **Framework:** Next.js
 - Env vars — copy from [`frontend/.env.vercel.example`](../frontend/.env.vercel.example):

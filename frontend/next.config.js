@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'standalone',
+  // standalone helps Docker; Vercel uses its own Next.js output handling.
+  output: process.env.VERCEL ? undefined : 'standalone',
   reactStrictMode: true,
   async rewrites() {
     // Static leadership build serves /data/snapshots — do not proxy to a backend.

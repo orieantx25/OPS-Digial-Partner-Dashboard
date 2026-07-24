@@ -4,6 +4,8 @@ import ReactECharts from 'echarts-for-react';
 import { useEffect, useMemo, useState } from 'react';
 import { ChartData } from '@/types';
 import { cn, formatNumber, formatPct } from '@/lib/utils';
+import { useIsMobile } from '@/hooks/use-is-mobile';
+import { isLeadershipMode } from '@/lib/static-mode';
 
 const THEME = {
   backgroundColor: 'transparent',
@@ -38,9 +40,12 @@ function maxSeriesValue(series: ChartData['series']): number {
 }
 
 /** Reserve enough left margin for full en-IN labels (e.g. 25,00,000). */
-function gridLeftForChart(series: ChartData['series']): number {
+function gridLeftForChart(series: ChartData['series'], compact = false): number {
   const max = maxSeriesValue(series);
   const label = formatNumber(Math.ceil(max * 1.12 || 1));
+  if (compact) {
+    return Math.max(44, Math.ceil(label.length * 5.5) + 10);
+  }
   return Math.max(68, Math.ceil(label.length * 7.5) + 16);
 }
 
@@ -743,24 +748,33 @@ export function ChartPanel({
   className,
   onCategoryClick,
 }: ChartPanelProps) {
+  const isMobile = useIsMobile();
+  const resolvedHeight = isMobile ? Math.min(height, 240) : height;
   const [focusedIndex, setFocusedIndex] = useState(0);
+  const displayChart = useMemo(() => {
+    if (!isMobile) return chart;
+    return {
+      ...chart,
+      extra: { ...chart.extra, compact_grid: true },
+    };
+  }, [chart, isMobile]);
   const mixedScale =
-    chart.chart_type === 'line' &&
-    chart.series.length > 1 &&
-    useDualYAxis(chart.series);
+    displayChart.chart_type === 'line' &&
+    displayChart.series.length > 1 &&
+    useDualYAxis(displayChart.series);
 
   useEffect(() => {
     setFocusedIndex(0);
-  }, [chart.chart_id]);
+  }, [displayChart.chart_id]);
 
   const option = useMemo(
-    () => buildOption(chart, focusedIndex),
-    [chart, focusedIndex]
+    () => buildOption(displayChart, focusedIndex),
+    [displayChart, focusedIndex]
   );
 
   const hasData =
-    chart.series.some((s) => s.data.length > 0) ||
-    (chart.extra?.data as unknown[] | undefined)?.length;
+    displayChart.series.some((s) => s.data.length > 0) ||
+    (displayChart.extra?.data as unknown[] | undefined)?.length;
 
   const onEvents = useMemo(() => {
     if (!onCategoryClick) return undefined;
@@ -769,22 +783,22 @@ export function ChartPanel({
         const idx =
           typeof params.dataIndex === 'number'
             ? params.dataIndex
-            : chart.categories.findIndex((c) => String(c) === String(params.name));
+            : displayChart.categories.findIndex((c) => String(c) === String(params.name));
         if (idx < 0) return;
-        const category = String(chart.categories[idx] ?? params.name ?? '');
+        const category = String(displayChart.categories[idx] ?? params.name ?? '');
         if (category) onCategoryClick(category, idx);
       },
     };
-  }, [onCategoryClick, chart.categories]);
+  }, [onCategoryClick, displayChart.categories]);
 
   return (
     <div
       className={`panel p-3 ${className || ''} ${onCategoryClick ? 'cursor-pointer' : ''}`}
     >
       {!hasData ? (
-        <div style={{ height }} className="flex flex-col">
-          {chart.title ? (
-            <div className="text-sm font-semibold text-text mb-2">{chart.title}</div>
+        <div style={{ height: resolvedHeight }} className="flex flex-col">
+          {displayChart.title ? (
+            <div className="text-sm font-semibold text-text mb-2">{displayChart.title}</div>
           ) : null}
           <div className="flex-1 flex items-center justify-center text-text-secondary text-sm border border-border border-dashed">
             No data available
@@ -792,22 +806,22 @@ export function ChartPanel({
         </div>
       ) : (
         <>
-          {(chart.title || mixedScale) && (
+          {(displayChart.title || mixedScale) && (
           <div className="flex items-start justify-between gap-2 mb-2">
-            {chart.title ? (
-              <div className="text-sm font-semibold text-text shrink-0">{chart.title}</div>
+            {displayChart.title ? (
+              <div className="text-sm font-semibold text-text shrink-0">{displayChart.title}</div>
             ) : (
               <div />
             )}
             {mixedScale && (
               <div className="flex flex-wrap gap-1 justify-end">
-                {chart.series.map((s, i) => (
+                {displayChart.series.map((s, i) => (
                   <button
                     key={s.name}
                     type="button"
                     onClick={() => setFocusedIndex(i)}
                     className={cn(
-                      'px-2 py-0.5 text-[11px] border transition-colors',
+                      'px-2 py-0.5 text-[11px] border transition-colors min-h-[32px]',
                       focusedIndex === i
                         ? 'bg-surface border-border text-text font-medium'
                         : 'border-transparent text-text-secondary hover:text-text'
@@ -831,12 +845,12 @@ export function ChartPanel({
               Select a metric to scale the chart — other lines stay visible for context.
             </p>
           )}
-          {onCategoryClick && (
+          {onCategoryClick && !isLeadershipMode() && (
             <p className="text-[10px] text-text-secondary mb-1">Click a bar or slice to explore leads</p>
           )}
           <ReactECharts
             option={option}
-            style={{ height: mixedScale ? height - 48 : height }}
+            style={{ height: mixedScale ? resolvedHeight - 48 : resolvedHeight }}
             opts={{ renderer: 'canvas' }}
             notMerge
             onEvents={onEvents}

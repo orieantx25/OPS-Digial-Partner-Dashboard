@@ -354,9 +354,11 @@ export default function ExecutivePage() {
           <ChartPanel
             chart={displayCharts.funnel}
             height={340}
-            onCategoryClick={(stage) => {
-              openExplorer(stage, FUNNEL_STAGE_LEAD_FILTERS[stage]);
-            }}
+            onCategoryClick={
+              leadership
+                ? undefined
+                : (stage) => openExplorer(stage, FUNNEL_STAGE_LEAD_FILTERS[stage])
+            }
           />
         </div>
         <div className="col-span-12 lg:col-span-7">
@@ -375,7 +377,7 @@ export default function ExecutivePage() {
       </div>
 
       <div className="grid grid-cols-12 gap-3">
-        <div className="col-span-12 lg:col-span-4 min-w-0 h-[320px] [&>.panel]:h-full [&>.panel]:box-border">
+        <div className="col-span-12 lg:col-span-4 min-w-0 h-auto min-h-[240px] lg:h-[320px] [&>.panel]:h-full [&>.panel]:box-border">
           <IndiaMap
             data={stateSummary ?? []}
             dimension="leads"
@@ -384,10 +386,10 @@ export default function ExecutivePage() {
             height={268}
           />
         </div>
-        <div className="col-span-12 lg:col-span-4 min-w-0 h-[320px] [&>.panel]:h-full [&>.panel]:box-border">
+        <div className="col-span-12 lg:col-span-4 min-w-0 h-auto min-h-[240px] lg:h-[320px] [&>.panel]:h-full [&>.panel]:box-border">
           <ChartPanel chart={displayCharts.lead_sources} height={268} />
         </div>
-        <div className="col-span-12 lg:col-span-4 min-w-0 h-[320px]">
+        <div className="col-span-12 lg:col-span-4 min-w-0 h-auto min-h-[240px] lg:h-[320px]">
           <div className="panel p-3 h-full box-border flex flex-col overflow-hidden">
             <div className="mb-2 shrink-0 min-w-0 space-y-1.5">
               <div className="text-sm font-semibold text-text">Trend</div>

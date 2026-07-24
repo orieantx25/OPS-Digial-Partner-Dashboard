@@ -4,6 +4,7 @@ import { KpiMetric } from '@/types';
 import { cn, formatCurrency, formatNumber, formatPct } from '@/lib/utils';
 import { KPI_LEAD_FILTERS } from '@/lib/lead-filters';
 import { useLeadExplorerStore } from '@/store/lead-explorer-store';
+import { isLeadershipMode } from '@/lib/static-mode';
 
 const PERCENT_KEYS = new Set(['roi', 'dnp_pct']);
 const DECIMAL_KEYS = new Set(['avg_dial_count']);
@@ -48,15 +49,16 @@ export function MetricCell({ metric }: { metric: KpiMetric }) {
   const openExplorer = useLeadExplorerStore((s) => s.openExplorer);
   const formatted = formatMetricValue(metric);
   const filterKey = KPI_LEAD_FILTERS[metric.key];
+  const interactive = !isLeadershipMode();
 
-  return (
-    <button
-      type="button"
-      onClick={() => openExplorer(metric.label, filterKey)}
-      className="px-3 py-2.5 border-r border-b border-border last:border-r-0 min-w-0 text-left w-full hover:bg-surface/80 transition-colors cursor-pointer group"
-      title={`View ${metric.label} leads`}
-    >
-      <div className="text-text-secondary text-[10px] uppercase tracking-wide mb-1 truncate group-hover:text-text">
+  const body = (
+    <>
+      <div
+        className={cn(
+          'text-text-secondary text-[10px] uppercase tracking-wide mb-1 truncate',
+          interactive && 'group-hover:text-text'
+        )}
+      >
         {metric.label}
       </div>
       <div className="flex items-baseline justify-between gap-1.5 min-w-0">
@@ -73,6 +75,25 @@ export function MetricCell({ metric }: { metric: KpiMetric }) {
           <DeltaBadge metric={metric} />
         </span>
       </div>
+    </>
+  );
+
+  if (!interactive) {
+    return (
+      <div className="px-3 py-3 border-r border-b border-border last:border-r-0 min-w-0 text-left w-full min-h-[72px]">
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => openExplorer(metric.label, filterKey)}
+      className="px-3 py-3 border-r border-b border-border last:border-r-0 min-w-0 text-left w-full hover:bg-surface/80 transition-colors cursor-pointer group min-h-[72px]"
+      title={`View ${metric.label} leads`}
+    >
+      {body}
     </button>
   );
 }
@@ -111,7 +132,7 @@ export function MetricStrip({ metrics, groups }: MetricStripProps) {
             <div
               className="grid"
               style={{
-                gridTemplateColumns: `repeat(auto-fit, minmax(152px, 1fr))`,
+                gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, 128px), 1fr))`,
               }}
             >
               {groupMetrics.map((m) => (

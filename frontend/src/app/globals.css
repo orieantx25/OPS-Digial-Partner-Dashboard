@@ -28,6 +28,7 @@ html, body {
   color: var(--color-text);
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 .kpi-value {

@@ -15,6 +15,7 @@ import { FUNNEL_STAGE_LEAD_FILTERS } from '@/lib/funnel-filters';
 import { KPI_LEAD_FILTERS } from '@/lib/lead-filters';
 import { useLeadExplorerStore } from '@/store/lead-explorer-store';
 import { cn, formatNumber, formatPct } from '@/lib/utils';
+import { isLeadershipMode } from '@/lib/static-mode';
 
 const CONNECTED_SPLIT_ROWS: { key: 'ai_connected' | 'ac_connected'; label: string }[] = [
   { key: 'ai_connected', label: 'AI Connected' },
@@ -24,6 +25,7 @@ const CONNECTED_SPLIT_ROWS: { key: 'ai_connected' | 'ac_connected'; label: strin
 export default function FunnelPage() {
   const filters = useEffectiveFilters();
   const openExplorer = useLeadExplorerStore((s) => s.openExplorer);
+  const leadership = isLeadershipMode();
   const [cohortBy, setCohortBy] = useState<'week' | 'month'>('month');
 
   const { data: funnel, loading, isFetching } = useFetch({
@@ -61,8 +63,12 @@ export default function FunnelPage() {
         const to = String(displayFunnel.categories[maxIdx] ?? '');
         items.push({
           text: `Largest drop-off: ${from} → ${to} (${formatPct(drops[maxIdx])} lost).`,
-          actionLabel: `View ${to}`,
-          onAction: () => openExplorer(to, FUNNEL_STAGE_LEAD_FILTERS[to]),
+          ...(leadership
+            ? {}
+            : {
+                actionLabel: `View ${to}`,
+                onAction: () => openExplorer(to, FUNNEL_STAGE_LEAD_FILTERS[to]),
+              }),
         });
       }
     }
@@ -73,20 +79,29 @@ export default function FunnelPage() {
       const connected = Number(displayFunnel.series[0]?.data[connectedIdx] || 0);
       items.push({
         text: `Lead → Connected: ${formatPct((connected / leadCount) * 100)} (${formatNumber(connected)}).`,
-        actionLabel: 'Explore',
-        onAction: () => openExplorer('Connected', KPI_LEAD_FILTERS.connected),
+        ...(leadership
+          ? {}
+          : {
+              actionLabel: 'Explore',
+              onAction: () => openExplorer('Connected', KPI_LEAD_FILTERS.connected),
+            }),
       });
     }
     if (leadCount > 0 && blockIdx >= 0) {
       const block = Number(displayFunnel.series[0]?.data[blockIdx] || 0);
       items.push({
         text: `Lead → Block Amount Paid: ${formatPct((block / leadCount) * 100)} (${formatNumber(block)}).`,
-        actionLabel: 'Explore',
-        onAction: () => openExplorer('Block Amount Paid', KPI_LEAD_FILTERS.block_amount_paid),
+        ...(leadership
+          ? {}
+          : {
+              actionLabel: 'Explore',
+              onAction: () =>
+                openExplorer('Block Amount Paid', KPI_LEAD_FILTERS.block_amount_paid),
+            }),
       });
     }
     return items.slice(0, 3);
-  }, [displayFunnel, drops, openExplorer]);
+  }, [displayFunnel, drops, openExplorer, leadership]);
 
   const cohortColumns: ColumnDef<Record<string, unknown>>[] = [
     { accessorKey: 'cohort', header: 'Cohort' },
@@ -109,8 +124,10 @@ export default function FunnelPage() {
           <ChartPanel
             chart={displayFunnel}
             height={400}
-            onCategoryClick={(stage) =>
-              openExplorer(stage, FUNNEL_STAGE_LEAD_FILTERS[stage])
+            onCategoryClick={
+              leadership
+                ? undefined
+                : (stage) => openExplorer(stage, FUNNEL_STAGE_LEAD_FILTERS[stage])
             }
           />
           <SectionHeader title="Stage Breakdown" />
@@ -129,15 +146,19 @@ export default function FunnelPage() {
                   <Fragment key={stage}>
                     <tr className="border-b border-border/50">
                       <td className="p-3 font-medium">
-                        <button
-                          type="button"
-                          className="hover:text-accent transition-colors"
-                          onClick={() =>
-                            openExplorer(String(stage), FUNNEL_STAGE_LEAD_FILTERS[String(stage)])
-                          }
-                        >
-                          {stage}
-                        </button>
+                        {leadership ? (
+                          stage
+                        ) : (
+                          <button
+                            type="button"
+                            className="hover:text-accent transition-colors"
+                            onClick={() =>
+                              openExplorer(String(stage), FUNNEL_STAGE_LEAD_FILTERS[String(stage)])
+                            }
+                          >
+                            {stage}
+                          </button>
+                        )}
                       </td>
                       <td className="p-3 text-right kpi-value">
                         {formatNumber(Number(displayFunnel.series[0]?.data[i] || 0))}
@@ -153,13 +174,17 @@ export default function FunnelPage() {
                       CONNECTED_SPLIT_ROWS.map(({ key, label }) => (
                         <tr key={key} className="border-b border-border/50 bg-surface/30">
                           <td className="p-3 pl-8 text-text-secondary">
-                            <button
-                              type="button"
-                              className="hover:text-text transition-colors"
-                              onClick={() => openExplorer(label, KPI_LEAD_FILTERS[key])}
-                            >
-                              {label}
-                            </button>
+                            {leadership ? (
+                              label
+                            ) : (
+                              <button
+                                type="button"
+                                className="hover:text-text transition-colors"
+                                onClick={() => openExplorer(label, KPI_LEAD_FILTERS[key])}
+                              >
+                                {label}
+                              </button>
+                            )}
                           </td>
                           <td className="p-3 text-right kpi-value text-text-secondary">
                             {formatNumber(Number(connectedSplit[key] || 0))}

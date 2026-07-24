@@ -5,6 +5,7 @@ import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
 import { StateSummary } from '@/types';
 import { formatNumber } from '@/lib/utils';
+import { useIsMobile } from '@/hooks/use-is-mobile';
 
 // Official LGD 2024 boundaries (36 states & UTs incl. Ladakh, post-2019 J&K split).
 const MAP_NAME = 'india-lgd-2024';
@@ -54,6 +55,8 @@ export function IndiaMap({
   topLabels = 5,
   title,
 }: IndiaMapProps) {
+  const isMobile = useIsMobile();
+  const resolvedHeight = isMobile ? Math.min(height, 280) : height;
   const [geo, setGeo] = useState<{ features: { properties: { NAME_1: string } }[] } | null>(null);
 
   useEffect(() => {
@@ -194,7 +197,7 @@ export function IndiaMap({
       {title && <div className="text-sm font-semibold text-text mb-2">{title}</div>}
       {!geo ? (
         <div
-          style={{ height }}
+          style={{ height: resolvedHeight }}
           className="flex items-center justify-center text-text-secondary text-sm"
         >
           Loading map…
@@ -204,7 +207,7 @@ export function IndiaMap({
           <ReactECharts
             key={dimension}
             option={option}
-            style={{ height }}
+            style={{ height: resolvedHeight }}
             opts={{ renderer: 'canvas' }}
             notMerge
           />

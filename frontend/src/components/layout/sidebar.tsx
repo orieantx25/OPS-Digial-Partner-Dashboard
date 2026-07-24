@@ -3,31 +3,12 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
-import {
-  LayoutDashboard, Filter, Users, Phone, Bot, UserCircle,
-  Megaphone, MapPin, IndianRupee, TrendingUp, Upload, Receipt,
-} from 'lucide-react';
+import { Upload } from 'lucide-react';
 import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { cn } from '@/lib/utils';
-import { DASHBOARD_PAGES, NAV_GROUPS } from '@/types';
+import { NAV_GROUPS, NAV_ICONS, NAV_PAGES } from '@/lib/nav';
 import { useAppStore } from '@/store/app-store';
 import { useUploadStore } from '@/store/upload-store';
-
-const ICONS: Record<string, React.ElementType> = {
-  executive: LayoutDashboard,
-  funnel: Filter,
-  partner: Users,
-  contactability: Phone,
-  'ai-calling': Bot,
-  persona: UserCircle,
-  campaign: Megaphone,
-  geographic: MapPin,
-  revenue: IndianRupee,
-  predictive: TrendingUp,
-  'block-payment': Receipt,
-};
-
-const NAV_PAGES = DASHBOARD_PAGES.filter((p) => p.id !== 'upload');
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -35,7 +16,7 @@ export function Sidebar() {
   const openUpload = useUploadStore((s) => s.openUpload);
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-52 bg-surface border-r border-border flex flex-col z-30">
+    <aside className="hidden lg:flex fixed left-0 top-0 h-screen w-52 bg-surface border-r border-border flex-col z-30">
       <div className="px-4 py-4 border-b border-primary bg-black">
         <Image
           src="/logo-dark.png"
@@ -59,7 +40,7 @@ export function Sidebar() {
                 {group}
               </div>
               {pages.map((page) => {
-                const Icon = ICONS[page.id] || LayoutDashboard;
+                const Icon = NAV_ICONS[page.id] || NAV_ICONS.executive;
                 const active =
                   pathname === page.href ||
                   (page.href !== '/' && pathname.startsWith(page.href));

@@ -103,8 +103,8 @@ export default function GeographicPage() {
         title="India — Distribution"
         subtitle={`Coloured by ${activeLabel} per state`}
         action={
-          <div className="flex items-center gap-2">
-            <div className="flex border border-border">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
+            <div className="flex border border-border w-full sm:w-auto">
               {[
                 { key: 'leads', label: 'Leads' },
                 { key: 'block_amount_paid', label: 'Block Amount' },
@@ -114,7 +114,7 @@ export default function GeographicPage() {
                   type="button"
                   onClick={() => setDimension(opt.key)}
                   className={cn(
-                    'px-3 py-1 text-xs',
+                    'flex-1 sm:flex-none px-3 py-2 text-xs min-h-[40px]',
                     dimension === opt.key
                       ? 'bg-primary text-white'
                       : 'bg-surface text-text-secondary hover:text-text'
@@ -125,7 +125,7 @@ export default function GeographicPage() {
               ))}
             </div>
             <select
-              className="input-field w-auto text-xs"
+              className="input-field w-full sm:w-auto text-xs min-h-[40px]"
               value={dimension}
               onChange={(e) => setDimension(e.target.value)}
             >

@@ -42,3 +42,7 @@ npm run build && npm run start
 ```
 
 Open http://localhost:3000 — charts should load with no backend on :8000.
+
+## Mobile (< 1024px)
+
+Leadership builds get a phone-first shell: top bar + hamburger drawer, bottom tabs (Overview / Funnel / Partners / More), wrapping date presets, stacked charts, and card-style summary tables. Desktop sidebar remains at `lg` and above.

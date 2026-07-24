@@ -2,7 +2,7 @@
 
 import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, X, RotateCcw, Upload } from 'lucide-react';
+import { ChevronDown, X, RotateCcw, Upload, SlidersHorizontal } from 'lucide-react';
 import { LeadSquaredSyncButton } from '@/components/sync/leadsquared-sync-button';
 import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { api } from '@/lib/api';
@@ -23,6 +23,7 @@ import {
 import { useAppStore } from '@/store/app-store';
 import { useUploadStore } from '@/store/upload-store';
 import { FilterOptions, FilterParams } from '@/types';
+import { cn } from '@/lib/utils';
 
 function MultiSelect({
   label,
@@ -203,6 +204,7 @@ export function FilterBar() {
   const dataRefreshToken = useUploadStore((s) => s.dataRefreshToken);
   const [options, setOptions] = useState<FilterOptions | null>(null);
   const [manifest, setManifest] = useState<SnapshotManifest | null>(null);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const leadership = isLeadershipMode();
   const staticMode = isStaticDataMode();
 
@@ -293,9 +295,91 @@ export function FilterBar() {
     partners: drillDown.partner ? [drillDown.partner] : filters.partner,
   });
 
+  const isAllTime =
+    activePreset === 'all' || (!filters.date_from && !filters.date_to);
+
+  const presetChipClass = (active: boolean) =>
+    cn(
+      'min-h-[40px] px-3 text-xs whitespace-nowrap border border-border',
+      active
+        ? 'bg-primary text-white border-primary'
+        : 'bg-surface text-text-secondary'
+    );
+
+  const scopeRow = (
+    <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-1.5 bg-surface border-t border-border text-xs">
+      <span className="text-text-secondary">Scope:</span>
+      <span className="text-text font-medium">{scopeLabel}</span>
+      {(drillDown.partner || drillDown.state || drillDown.city) && (
+        <>
+          <span className="text-border">|</span>
+          <span className="text-text-secondary">Drill-down:</span>
+          {drillDown.partner && <span className="text-primary">{drillDown.partner}</span>}
+          {drillDown.state && <span>→ {drillDown.state}</span>}
+          {drillDown.city && <span>→ {drillDown.city}</span>}
+          <button
+            type="button"
+            onClick={clearDrillDown}
+            className="ml-1 text-text-secondary hover:text-primary min-h-[32px] min-w-[32px] inline-flex items-center justify-center"
+            aria-label="Clear drill-down"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </>
+      )}
+    </div>
+  );
+
   return (
-    <div className="sticky top-0 z-30 bg-bg border-b border-border">
-      <div className="flex items-end gap-3 px-4 py-2 overflow-x-auto">
+    <div className="sticky top-14 z-30 bg-bg border-b border-border lg:top-0">
+      {/* Mobile: wrapping preset chips */}
+      <div className="lg:hidden px-3 py-2 space-y-2">
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={applyAllTime} className={presetChipClass(isAllTime)}>
+            All time
+          </button>
+          {DATE_PRESETS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => applyPreset(p.id)}
+              className={presetChipClass(activePreset === p.id)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="btn-secondary flex min-h-[40px] items-center gap-1.5 px-3 text-xs"
+            onClick={resetFilters}
+          >
+            <RotateCcw className="w-3.5 h-3.5" /> Reset
+          </button>
+          {!leadership && (
+            <button
+              type="button"
+              className="btn-secondary flex min-h-[40px] items-center gap-1.5 px-3 text-xs"
+              onClick={() => setMobileFiltersOpen(true)}
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" /> Filters
+            </button>
+          )}
+          {canUpload() && (
+            <button
+              type="button"
+              className="btn-primary flex min-h-[40px] items-center gap-1.5 px-3 text-xs ml-auto"
+              onClick={openUpload}
+            >
+              <Upload className="w-3.5 h-3.5" /> Upload
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Desktop toolbar */}
+      <div className="hidden lg:flex items-end gap-3 px-4 py-2 overflow-x-auto">
         {!leadership && (
           <>
             <div className="flex flex-col gap-0.5 min-w-[120px]">
@@ -336,7 +420,7 @@ export function FilterBar() {
               onClick={applyAllTime}
               className={
                 'px-2 text-[11px] whitespace-nowrap ' +
-                (activePreset === 'all' || (!filters.date_from && !filters.date_to)
+                (isAllTime
                   ? 'bg-primary text-white'
                   : 'bg-surface text-text-secondary hover:text-text')
               }
@@ -413,27 +497,95 @@ export function FilterBar() {
           )}
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 px-4 py-1 bg-surface border-t border-border text-xs">
-        <span className="text-text-secondary">Scope:</span>
-        <span className="text-text font-medium">{scopeLabel}</span>
-        {(drillDown.partner || drillDown.state || drillDown.city) && (
-          <>
-            <span className="text-border">|</span>
-            <span className="text-text-secondary">Drill-down:</span>
-            {drillDown.partner && <span className="text-primary">{drillDown.partner}</span>}
-            {drillDown.state && <span>→ {drillDown.state}</span>}
-            {drillDown.city && <span>→ {drillDown.city}</span>}
+
+      {scopeRow}
+
+      {/* Ops mobile filter sheet */}
+      {!leadership && mobileFiltersOpen && (
+        <div className="lg:hidden fixed inset-0 z-[60]">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/60"
+            aria-label="Close filters"
+            onClick={() => setMobileFiltersOpen(false)}
+          />
+          <div className="absolute bottom-0 inset-x-0 max-h-[80vh] overflow-y-auto bg-surface border-t border-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-text">Filters</h2>
+              <button
+                type="button"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-text-secondary"
+                onClick={() => setMobileFiltersOpen(false)}
+                aria-label="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] uppercase tracking-wide text-text-secondary">
+                  Date From
+                </label>
+                <input
+                  type="date"
+                  className="input-field text-sm min-h-[44px]"
+                  value={filters.date_from || ''}
+                  max={filters.date_to || undefined}
+                  onChange={(e) =>
+                    setFilters(dateRangePatch(e.target.value || undefined, filters.date_to))
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] uppercase tracking-wide text-text-secondary">
+                  Date To
+                </label>
+                <input
+                  type="date"
+                  className="input-field text-sm min-h-[44px]"
+                  value={filters.date_to || ''}
+                  min={filters.date_from || undefined}
+                  onChange={(e) =>
+                    setFilters(dateRangePatch(filters.date_from, e.target.value || undefined))
+                  }
+                />
+              </div>
+            </div>
+            {options && (
+              <div className="space-y-3">
+                <MultiSelect
+                  label="Partner"
+                  options={options.partners}
+                  value={filters.partner || []}
+                  onChange={(v) => setFilters({ partner: v.length ? v : undefined })}
+                />
+                <MultiSelect
+                  label="Persona"
+                  options={options.personas}
+                  value={filters.persona || []}
+                  onChange={(v) => setFilters({ persona: v.length ? v : undefined })}
+                />
+                <MultiSelect
+                  label="Contact Stage"
+                  options={options.contact_stages}
+                  value={filters.contact_stage || []}
+                  onChange={(v) => setFilters({ contact_stage: v.length ? v : undefined })}
+                />
+              </div>
+            )}
+            <div className="pt-1">
+              <LeadSquaredSyncButton />
+            </div>
             <button
               type="button"
-              onClick={clearDrillDown}
-              className="ml-1 text-text-secondary hover:text-primary"
-              aria-label="Clear drill-down"
+              className="btn-primary w-full min-h-[44px]"
+              onClick={() => setMobileFiltersOpen(false)}
             >
-              <X className="w-3 h-3" />
+              Done
             </button>
-          </>
-        )}
-      </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

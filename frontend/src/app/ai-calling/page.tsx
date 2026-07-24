@@ -85,7 +85,7 @@ export default function AiCallingPage() {
       </div>
 
       <SectionHeader title="Outcome Breakdown" />
-      <div className="panel grid grid-cols-3 md:grid-cols-5">
+      <div className="panel grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5">
         {AI_METRICS.map(({ key, label }) => (
           <ClickableMetricBox
             key={key}

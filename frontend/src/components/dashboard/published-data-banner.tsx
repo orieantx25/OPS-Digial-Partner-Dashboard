@@ -26,16 +26,16 @@ export function PublishedDataBanner() {
   if (!isStaticDataMode()) return null;
 
   return (
-    <div className="mb-3 px-3 py-2 text-xs border border-border bg-surface text-text-secondary flex flex-wrap items-center gap-x-2 gap-y-1">
+    <div className="mb-3 px-3 py-2 text-xs border border-border bg-surface text-text-secondary flex flex-wrap items-center gap-x-2 gap-y-1 leading-snug">
       {missing ? (
         <span>
-          No published snapshot found. Run{' '}
-          <code className="text-text">python backend/scripts/publish_snapshots.py</code> locally,
-          then redeploy.
+          No published snapshot. Re-publish from local, then redeploy.
         </span>
       ) : (
         <>
-          <span className="uppercase tracking-wide text-[10px] text-text-secondary">Data as of</span>
+          <span className="uppercase tracking-wide text-[10px] text-text-secondary shrink-0">
+            Data as of
+          </span>
           <span className="text-text font-medium tabular-nums">
             {publishedAt
               ? new Date(publishedAt).toLocaleString(undefined, {
@@ -44,8 +44,6 @@ export function PublishedDataBanner() {
                 })
               : '…'}
           </span>
-          <span className="text-border">·</span>
-          <span>Refresh by publishing from local and redeploying</span>
         </>
       )}
     </div>

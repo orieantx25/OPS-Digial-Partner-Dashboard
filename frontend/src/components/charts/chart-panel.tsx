@@ -152,7 +152,8 @@ function useDualYAxis(series: ChartData['series']): boolean {
 function buildLineOption(
   chart: ChartData,
   base: Record<string, unknown>,
-  focusedIndex: number
+  focusedIndex: number,
+  isMobile = false
 ) {
   const multi = chart.series.length > 1;
   const mixedScale = multi && useDualYAxis(chart.series);
@@ -169,14 +170,27 @@ function buildLineOption(
       ...(base.grid as object),
       top: mixedScale ? 44 : multi ? 56 : 44,
       right: 16,
-      left: gridLeftForChart(chart.series),
+      left: gridLeftForChart(chart.series, isMobile),
       containLabel: false,
     },
     legend: { show: false },
-    xAxis: { type: 'category', data: chart.categories, axisLine: { lineStyle: { color: '#3A3A3A' } } },
+    xAxis: {
+      type: 'category',
+      data: chart.categories,
+      axisLine: { lineStyle: { color: '#3A3A3A' } },
+      axisLabel: isMobile
+        ? {
+            rotate: 35,
+            interval: 'auto',
+            fontSize: 9,
+            hideOverlap: true,
+            formatter: (value: string) => truncateAxisLabel(value, 8),
+          }
+        : undefined,
+    },
     yAxis: mixedScale
       ? valueYAxis({
-          name: chart.series[focusedIndex]?.name,
+          name: isMobile ? '' : chart.series[focusedIndex]?.name,
           nameTextStyle: { color: SERIES_COLORS[focusedIndex % SERIES_COLORS.length], fontSize: 10 },
           max: Math.ceil(focusMax * 1.12),
           axisLine: { show: true, lineStyle: { color: '#3A3A3A' } },
@@ -198,11 +212,13 @@ function buildLineOption(
         areaStyle: chart.chart_type === 'area' && focused ? { opacity: 0.15 } : undefined,
         lineStyle: { color, width: focused ? 3 : 1.5, opacity: dimmed ? 0.18 : 1 },
         itemStyle: { color, opacity: dimmed ? 0.18 : 1 },
-        label: valuePointLabel({
-          color,
-          opacity: dimmed ? 0.25 : 1,
-          fontWeight: focused ? 600 : 'normal',
-        }),
+        label: isMobile
+          ? { show: false }
+          : valuePointLabel({
+              color,
+              opacity: dimmed ? 0.25 : 1,
+              fontWeight: focused ? 600 : 'normal',
+            }),
         labelLayout: { hideOverlap: true },
         emphasis: { disabled: dimmed },
       };
@@ -210,24 +226,65 @@ function buildLineOption(
   };
 }
 
-function buildOption(chart: ChartData, focusedIndex = 0) {
+function mobileBarLegend(seriesNames: string[]) {
+  return {
+    type: 'scroll' as const,
+    orient: 'horizontal' as const,
+    bottom: 0,
+    left: 4,
+    right: 4,
+    icon: 'roundRect',
+    itemWidth: 8,
+    itemHeight: 8,
+    itemGap: 8,
+    pageIconSize: 10,
+    pageTextStyle: { color: '#B5B5B5', fontSize: 10 },
+    textStyle: { color: '#B5B5B5', fontSize: 10 },
+    data: seriesNames,
+    selected: Object.fromEntries(seriesNames.map((n) => [n, true])),
+  };
+}
+
+function truncateAxisLabel(value: string, max = 14): string {
+  const text = String(value).replace(/\n/g, ' ').trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1)}…`;
+}
+
+/** Crowded vertical clustered bars become unreadable on phones — flip to horizontal. */
+function shouldForceHorizontalOnMobile(chart: ChartData): boolean {
+  if (chart.chart_type !== 'bar') return false;
+  if (chart.extra?.horizontal) return false;
+  const cats = chart.categories.length;
+  const longLabels = chart.categories.some(
+    (c) => String(c).replace(/\n/g, ' ').length > 10
+  );
+  return (
+    cats >= 3 &&
+    (longLabels || chart.series.length > 1 || useDualYAxis(chart.series))
+  );
+}
+
+function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
   const base = {
     ...THEME,
     // Title is rendered by the panel header — keep ECharts title hidden to avoid duplicates.
     title: { show: false, text: '' },
     tooltip: axisTooltip(),
     grid: chartGrid(chart.series, {}, chart.extra),
-    toolbox: {
-      right: 4,
-      top: 0,
-      itemSize: 14,
-      itemGap: 10,
-      feature: {
-        saveAsImage: { title: 'PNG' },
-        dataView: { readOnly: true },
-      },
-      iconStyle: { borderColor: '#B5B5B5' },
-    },
+    toolbox: isMobile
+      ? { show: false }
+      : {
+          right: 4,
+          top: 0,
+          itemSize: 14,
+          itemGap: 10,
+          feature: {
+            saveAsImage: { title: 'PNG' },
+            dataView: { readOnly: true },
+          },
+          iconStyle: { borderColor: '#B5B5B5' },
+        },
   };
 
   switch (chart.chart_type) {
@@ -237,7 +294,7 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
       const forecastStyle = Boolean(chart.extra?.forecast_style);
       const mixedScale = multi && !forecastStyle && useDualYAxis(chart.series);
       if (mixedScale) {
-        return buildLineOption(chart, base, focusedIndex);
+        return buildLineOption(chart, base, focusedIndex, isMobile);
       }
       return {
         ...base,
@@ -363,7 +420,9 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
               opacity: isExpected ? 0.85 : 1,
             },
             itemStyle: { color },
-            label: valuePointLabel({ color, fontWeight: isExpected ? 600 : 'normal' }),
+            label: isMobile
+              ? { show: false }
+              : valuePointLabel({ color, fontWeight: isExpected ? 600 : 'normal' }),
             labelLayout: { hideOverlap: true },
           };
         }),
@@ -372,8 +431,12 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
 
     case 'bar': {
       const multiBar = chart.series.length > 1;
-      const horizontal = Boolean(chart.extra?.horizontal);
-      const mixedScale = !horizontal && multiBar && useDualYAxis(chart.series);
+      const horizontal =
+        Boolean(chart.extra?.horizontal) ||
+        (isMobile && shouldForceHorizontalOnMobile(chart));
+      const wantsDualScale = multiBar && useDualYAxis(chart.series);
+      // Dual value-axis: vertical uses yAxisIndex; horizontal uses xAxisIndex.
+      const mixedScale = wantsDualScale;
       const stackNames = new Set(
         ((chart.extra?.stack_block as string[] | undefined) ?? [
           BLOCK_SERIES_NAME,
@@ -384,64 +447,163 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
         stackNames.has(BLOCK_SERIES_NAME) && stackNames.has(CLASH_SERIES_NAME);
 
       const legend = multiBar
-        ? {
-            top: 4,
-            right: LEGEND_RIGHT_CLEAR_TOOLBOX,
-            icon: 'roundRect',
-            itemWidth: 10,
-            itemHeight: 10,
-            textStyle: { color: '#B5B5B5', fontSize: 11 },
-            data: chart.series.map((s) => s.name),
-            selected: Object.fromEntries(chart.series.map((s) => [s.name, true])),
-          }
+        ? isMobile
+          ? mobileBarLegend(chart.series.map((s) => s.name))
+          : {
+              top: 4,
+              right: LEGEND_RIGHT_CLEAR_TOOLBOX,
+              icon: 'roundRect',
+              itemWidth: 10,
+              itemHeight: 10,
+              textStyle: { color: '#B5B5B5', fontSize: 11 },
+              data: chart.series.map((s) => s.name),
+              selected: Object.fromEntries(chart.series.map((s) => [s.name, true])),
+            }
         : undefined;
 
+      const showBarLabels = !isMobile;
       const barSeries = chart.series.map((s, i) => {
         const color = seriesColor(s.name, i);
         const stacked = hasBlockStack && stackNames.has(s.name);
         const isClash = s.name === CLASH_SERIES_NAME;
         const isCleanBlock = s.name === BLOCK_SERIES_NAME && stacked;
+        const dualIndex = mixedScale ? (i === 0 ? 0 : 1) : 0;
         return {
           name: s.name,
           type: 'bar' as const,
-          yAxisIndex: mixedScale ? (i === 0 ? 0 : 1) : 0,
+          ...(horizontal
+            ? { xAxisIndex: dualIndex }
+            : { yAxisIndex: dualIndex }),
           stack: stacked ? 'block_amount' : undefined,
           barGap: '10%',
+          barMaxWidth: isMobile ? 18 : undefined,
           data: barSeriesData(s.data),
           itemStyle: { color },
-          label: valuePointLabel({
-            position: horizontal
-              ? 'right'
-              : isCleanBlock
-                ? 'inside'
-                : 'top',
-            color: isClash ? CLASH_SERIES_COLOR : isCleanBlock ? '#FFFFFF' : color,
-            fontWeight: isClash || isCleanBlock ? 600 : 'normal',
-          }),
+          label: showBarLabels
+            ? valuePointLabel({
+                position: horizontal
+                  ? 'right'
+                  : isCleanBlock
+                    ? 'inside'
+                    : 'top',
+                color: isClash ? CLASH_SERIES_COLOR : isCleanBlock ? '#FFFFFF' : color,
+                fontWeight: isClash || isCleanBlock ? 600 : 'normal',
+              })
+            : { show: false },
           labelLayout: { hideOverlap: true },
         };
       });
 
-      if (horizontal) {
-        const labelWidth = Math.min(
-          220,
-          Math.max(
-            120,
-            ...chart.categories.map((c) =>
-              Math.max(...c.split('\n').map((line) => line.length * 7))
-            )
+      const secondaryMax = mixedScale
+        ? Math.max(
+            ...chart.series.slice(1).flatMap((s) => {
+              if (hasBlockStack && stackNames.has(s.name)) return [0];
+              return s.data.map((v) => Number(v) || 0);
+            }),
+            ...((chart.extra?.block_amount_total as number[] | undefined) ?? []),
+            1
           )
-        );
+        : 1;
+
+      if (horizontal) {
+        const labelWidth = isMobile
+          ? Math.min(
+              108,
+              Math.max(
+                72,
+                ...chart.categories.map((c) =>
+                  Math.min(truncateAxisLabel(c, 16).length * 6.5, 108)
+                )
+              )
+            )
+          : Math.min(
+              220,
+              Math.max(
+                120,
+                ...chart.categories.map((c) =>
+                  Math.max(...c.split('\n').map((line) => line.length * 7))
+                )
+              )
+            );
+        const valueAxes = mixedScale
+          ? [
+              valueYAxis({
+                name: isMobile ? '' : chart.series[0]?.name,
+                nameTextStyle: { color: SERIES_COLORS[0], fontSize: 10 },
+                axisLabel: {
+                  color: '#B5B5B5',
+                  fontSize: isMobile ? 9 : 11,
+                  formatter: (value: number) => formatNumber(Number(value)),
+                },
+              }),
+              valueYAxis({
+                name: '',
+                position: 'top',
+                max: Math.ceil(secondaryMax * 1.25),
+                splitLine: { show: false },
+                axisLabel: {
+                  color: '#B5B5B5',
+                  fontSize: isMobile ? 9 : 11,
+                  formatter: (value: number) => formatNumber(Number(value)),
+                },
+              }),
+            ]
+          : valueYAxis({
+              splitLine: { lineStyle: { color: '#2A2A2A' } },
+              axisLabel: {
+                color: '#B5B5B5',
+                fontSize: isMobile ? 9 : 11,
+                formatter: (value: number) => formatNumber(Number(value)),
+              },
+            });
+
         return {
           ...base,
           grid: {
-            left: labelWidth + 16,
-            right: 24,
-            top: multiBar ? 56 : 36,
-            bottom: 24,
+            left: labelWidth + (isMobile ? 8 : 16),
+            right: mixedScale
+              ? isMobile
+                ? 40
+                : 48
+              : isMobile
+                ? chart.categories.length > 8
+                  ? 28
+                  : 12
+                : 24,
+            top: multiBar ? (isMobile ? 12 : 56) : isMobile ? 12 : 36,
+            bottom: multiBar && isMobile ? 36 : 24,
             containLabel: false,
           },
           legend,
+          ...(isMobile && chart.categories.length > 8
+            ? {
+                dataZoom: [
+                  {
+                    type: 'inside',
+                    yAxisIndex: 0,
+                    start: 0,
+                    end: Math.min(100, (8 / chart.categories.length) * 100),
+                    zoomOnMouseWheel: false,
+                    moveOnMouseMove: true,
+                    moveOnMouseWheel: true,
+                  },
+                  {
+                    type: 'slider',
+                    yAxisIndex: 0,
+                    width: 14,
+                    right: 2,
+                    top: multiBar ? 16 : 12,
+                    bottom: multiBar ? 40 : 28,
+                    start: 0,
+                    end: Math.min(100, (8 / chart.categories.length) * 100),
+                    borderColor: '#3A3A3A',
+                    fillerColor: 'rgba(227, 30, 36, 0.25)',
+                    handleStyle: { color: '#E31E24' },
+                    textStyle: { color: '#B5B5B5', fontSize: 9 },
+                  },
+                ],
+              }
+            : {}),
           yAxis: {
             type: 'category',
             data: chart.categories,
@@ -450,12 +612,13 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
             axisTick: { show: false },
             axisLabel: {
               color: '#D5D5D5',
-              fontSize: 11,
-              lineHeight: 16,
+              fontSize: isMobile ? 10 : 11,
+              lineHeight: isMobile ? 13 : 16,
               interval: 0,
               width: labelWidth,
-              overflow: 'break',
+              overflow: isMobile ? 'truncate' : 'break',
               formatter: (value: string) => {
+                if (isMobile) return truncateAxisLabel(value, 16);
                 const [campaign, partner] = String(value).split('\n');
                 if (!partner) return campaign;
                 return `{campaign|${campaign}}\n{partner|${partner}}`;
@@ -475,76 +638,77 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
               },
             },
           },
-          xAxis: valueYAxis({
-            splitLine: { lineStyle: { color: '#2A2A2A' } },
-          }),
+          xAxis: valueAxes,
           series: barSeries,
         };
       }
 
       if (mixedScale) {
-        const totals = (chart.extra?.block_amount_total as number[] | undefined) ?? [];
-        const secondaryMax = Math.max(
-          ...chart.series.slice(1).flatMap((s) => {
-            if (hasBlockStack && stackNames.has(s.name)) return [0];
-            return s.data.map((v) => Number(v) || 0);
-          }),
-          ...totals,
-          1
-        );
         const multilineX = Boolean(chart.extra?.multiline_x_labels) ||
           chart.categories.some((c) => c.includes('\n'));
         return {
           ...base,
           grid: chartGrid(chart.series, {
-            top: multiBar ? 56 : 44,
-            right: 72,
-            bottom: multilineX ? 56 : 32,
+            top: multiBar ? (isMobile ? 12 : 56) : 44,
+            right: isMobile ? 44 : 72,
+            bottom: isMobile ? (multiBar ? 48 : 52) : multilineX ? 56 : 32,
           }),
           legend,
           xAxis: {
             type: 'category',
             data: chart.categories,
-            axisLabel: multilineX
-              ? {
-                  rotate: 0,
-                  interval: 0,
+            axisLabel: {
+              rotate: isMobile ? 35 : 0,
+              interval: 0,
+              fontSize: isMobile ? 9 : 10,
+              hideOverlap: true,
+              width: isMobile ? 56 : undefined,
+              overflow: isMobile ? 'truncate' : undefined,
+              lineHeight: 14,
+              formatter: (value: string) => {
+                if (isMobile) return truncateAxisLabel(value, 10);
+                if (!value.includes('\n')) return value;
+                const [campaign, partner] = String(value).split('\n');
+                if (!partner) return campaign;
+                return `{campaign|${campaign}}\n{partner|${partner}}`;
+              },
+              rich: {
+                campaign: {
+                  color: '#FFFFFF',
                   fontSize: 10,
-                  hideOverlap: false,
+                  fontWeight: 600,
                   lineHeight: 14,
-                  formatter: (value: string) => {
-                    const [campaign, partner] = String(value).split('\n');
-                    if (!partner) return campaign;
-                    return `{campaign|${campaign}}\n{partner|${partner}}`;
-                  },
-                  rich: {
-                    campaign: {
-                      color: '#FFFFFF',
-                      fontSize: 10,
-                      fontWeight: 600,
-                      lineHeight: 14,
-                    },
-                    partner: {
-                      color: '#9CA3AF',
-                      fontSize: 9,
-                      lineHeight: 12,
-                    },
-                  },
-                }
-              : { rotate: 0, interval: 0, fontSize: 10, hideOverlap: false },
+                },
+                partner: {
+                  color: '#9CA3AF',
+                  fontSize: 9,
+                  lineHeight: 12,
+                },
+              },
+            },
           },
           yAxis: [
             valueYAxis({
-              name: chart.series[0]?.name,
+              name: isMobile ? '' : chart.series[0]?.name,
               position: 'left',
               nameTextStyle: { color: SERIES_COLORS[0], fontSize: 10 },
+              axisLabel: {
+                color: '#B5B5B5',
+                fontSize: isMobile ? 9 : 11,
+                formatter: (value: number) => formatNumber(Number(value)),
+              },
             }),
             valueYAxis({
-              name: 'Block / Offer / Admissions',
+              name: isMobile ? '' : 'Block / Offer / Admissions',
               position: 'right',
               max: Math.ceil(secondaryMax * 1.25),
               splitLine: { show: false },
               nameTextStyle: { color: SERIES_COLORS[1], fontSize: 10 },
+              axisLabel: {
+                color: '#B5B5B5',
+                fontSize: isMobile ? 9 : 11,
+                formatter: (value: number) => formatNumber(Number(value)),
+              },
             }),
           ],
           series: barSeries,
@@ -556,20 +720,23 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
       return {
         ...base,
         grid: chartGrid(chart.series, {
-          top: multiBar ? 56 : 44,
-          bottom: multilineX ? 56 : 32,
+          top: multiBar ? (isMobile ? 12 : 56) : 44,
+          bottom: isMobile ? (multiBar ? 48 : 52) : multilineX ? 56 : 32,
         }),
         legend,
         xAxis: {
           type: 'category',
           data: chart.categories,
           axisLabel: {
-            rotate: 0,
+            rotate: isMobile ? 35 : 0,
             interval: 0,
-            fontSize: 10,
-            hideOverlap: false,
+            fontSize: isMobile ? 9 : 10,
+            hideOverlap: true,
+            width: isMobile ? 56 : undefined,
+            overflow: isMobile ? 'truncate' : undefined,
             lineHeight: 14,
             formatter: (value: string) => {
+              if (isMobile) return truncateAxisLabel(value, 10);
               if (!value.includes('\n')) return value;
               const [campaign, partner] = value.split('\n');
               return `{campaign|${campaign}}\n{partner|${partner}}`;
@@ -580,7 +747,13 @@ function buildOption(chart: ChartData, focusedIndex = 0) {
             },
           },
         },
-        yAxis: valueYAxis(),
+        yAxis: valueYAxis({
+          axisLabel: {
+            color: '#B5B5B5',
+            fontSize: isMobile ? 9 : 11,
+            formatter: (value: number) => formatNumber(Number(value)),
+          },
+        }),
         series: barSeries,
       };
     }
@@ -749,15 +922,32 @@ export function ChartPanel({
   onCategoryClick,
 }: ChartPanelProps) {
   const isMobile = useIsMobile();
-  const resolvedHeight = isMobile ? Math.min(height, 240) : height;
   const [focusedIndex, setFocusedIndex] = useState(0);
   const displayChart = useMemo(() => {
     if (!isMobile) return chart;
+    // Horizontal mobile bars need room for partner names —
+    // compact_grid's containLabel squeezes labels into the plot.
+    if (shouldForceHorizontalOnMobile(chart) || chart.extra?.horizontal) {
+      return chart;
+    }
     return {
       ...chart,
       extra: { ...chart.extra, compact_grid: true },
     };
   }, [chart, isMobile]);
+  const forceHorizontal =
+    isMobile && shouldForceHorizontalOnMobile(displayChart);
+  const resolvedHeight = useMemo(() => {
+    if (!isMobile) return height;
+    if (forceHorizontal || displayChart.extra?.horizontal) {
+      const rows = Math.max(displayChart.categories.length, 1);
+      const visibleRows = Math.min(rows, 8);
+      const rowH = Math.max(40, 18 + displayChart.series.length * 8);
+      const seriesPad = displayChart.series.length > 1 ? 48 : 28;
+      return Math.min(560, Math.max(300, visibleRows * rowH + seriesPad));
+    }
+    return Math.min(height, 240);
+  }, [isMobile, height, forceHorizontal, displayChart]);
   const mixedScale =
     displayChart.chart_type === 'line' &&
     displayChart.series.length > 1 &&
@@ -768,8 +958,8 @@ export function ChartPanel({
   }, [displayChart.chart_id]);
 
   const option = useMemo(
-    () => buildOption(displayChart, focusedIndex),
-    [displayChart, focusedIndex]
+    () => buildOption(displayChart, focusedIndex, isMobile),
+    [displayChart, focusedIndex, isMobile]
   );
 
   const hasData =

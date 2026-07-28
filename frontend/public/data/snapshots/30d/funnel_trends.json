@@ -1,1 +1,1 @@
-{"chart_id":"funnel_trends","chart_type":"line","title":"Monthly Funnel Conversion % (of leads)","categories":["2026-06","2026-07"],"series":[{"name":"Connected %","data":[2.15,0.89]},{"name":"MQL %","data":[0.18,0.09]},{"name":"Application %","data":[0.01,0.01]},{"name":"Block Amount %","data":[0.0,0.0]},{"name":"Admission %","data":[0.0,0.0]}],"extra":{}}
+{"chart_id":"funnel_trends","chart_type":"line","title":"Funnel Conversion Trends","categories":[],"series":[],"extra":{}}

@@ -202,6 +202,8 @@ ALL_COLUMNS: List[str] = REQUIRED_COLUMNS + OPTIONAL_COLUMNS + DERIVED_COLUMNS
 
 MASTER_DATASET_TABLE = "master_dataset"
 MASTER_PARQUET_FILE = "master_dataset.parquet"
+# LeadSquared CreatedOn (and workbook prospect-creation columns) normalize here.
+LEAD_CREATED_DATE_COLUMN = "date"
 
 # Block payment back-tracking sheet (uploaded separately from MASTER_DATASET).
 BLOCK_PAYMENT_TABLE = "block_payment_tracking"

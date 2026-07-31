@@ -24,6 +24,12 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
 sys.path.insert(0, str(BACKEND_ROOT))
 
+# IMPORTANT: chdir to backend root so that relative paths in .env
+# (e.g. DATA_DIR=./data, PARQUET_DIR=./data/parquet) resolve correctly,
+# regardless of where this script is invoked from (repo root, frontend/, etc.).
+import os as _os
+_os.chdir(str(BACKEND_ROOT))
+
 from app.domain.models import FilterParams  # noqa: E402
 from app.infrastructure.duckdb_repo import AnalyticsCache, DuckDBRepository  # noqa: E402
 from app.services.analytics_service import AnalyticsEngine  # noqa: E402
@@ -106,7 +112,6 @@ def _strip_partner_detail(detail: Dict[str, Any]) -> Dict[str, Any]:
         out["block_counsellor_clashes"] = {
             **clashes,
             "rows": [],
-            "note": "Lead-level clash rows omitted from leadership snapshot",
         }
     return out
 
@@ -117,7 +122,6 @@ def _strip_clashes_list(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         **payload,
         "rows": [],
-        "note": "Lead-level clash rows omitted from leadership snapshot",
     }
 
 

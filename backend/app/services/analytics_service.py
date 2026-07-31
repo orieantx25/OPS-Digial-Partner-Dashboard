@@ -1,12 +1,13 @@
 """SQL-based analytics engine operating on MASTER_DATASET."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.domain.models import AlertItem, ChartData, ChartSeries, FilterParams, KpiMetric, PaginatedResponse
 from app.domain.schema import (
     BLOCK_PAYMENT_TABLE,
     FUNNEL_STAGES,
+    LEAD_CREATED_DATE_COLUMN,
     MASTER_DATASET_TABLE,
     PARTNER_CANONICAL,
     PARTNER_COMMERCIALS,
@@ -39,6 +40,8 @@ SAFE_DIALS_EXPR = (
 # Executive KPI + contactability bucket — Col J Last Activity = Lead Capture.
 LEADS_NOT_TOUCHED_EXPR = "LOWER(TRIM(COALESCE(last_activity, ''))) = 'lead capture'"
 LEADS_NOT_TOUCHED_LABEL = "Leads not Touched"
+# Counsellor clashes apply only when LeadSquared lead CreatedOn is before this date.
+BLOCK_CLASH_LEAD_CUTOFF = date(2026, 6, 6)
 
 
 class AnalyticsEngine:
@@ -1901,6 +1904,40 @@ class AnalyticsEngine:
     def _is_counsellor_payment_source(value: Any) -> bool:
         return "counsell" in str(value or "").lower()
 
+    @staticmethod
+    def _coerce_lead_created_date(value: Any) -> Optional[date]:
+        """Normalize LeadSquared CreatedOn / master `date` to a calendar date."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+
+    def _counsellor_clash_created_date_sql(self, alias: str = "p") -> str:
+        """SQL filter on master lead CreatedOn (`date` column from LeadSquared import)."""
+        col = LEAD_CREATED_DATE_COLUMN
+        cutoff = BLOCK_CLASH_LEAD_CUTOFF.isoformat()
+        return (
+            f"{alias}.{col} IS NOT NULL "
+            f"AND CAST({alias}.{col} AS DATE) < DATE '{cutoff}'"
+        )
+
+    def _is_counsellor_clash_lead(self, row: Dict[str, Any]) -> bool:
+        if row.get("match_status") != "matched" or not row.get("partner"):
+            return False
+        if not self._is_counsellor_payment_source(row.get("source_at_payment")):
+            return False
+        created_on = self._coerce_lead_created_date(row.get(LEAD_CREATED_DATE_COLUMN))
+        return created_on is not None and created_on < BLOCK_CLASH_LEAD_CUTOFF
+
     def _matched_block_payment_cte(self, where: str, block_clause: str) -> str:
         """Shared CTE: block-paid master rows matched to payment sheet by email then phone."""
         return f"""
@@ -1911,6 +1948,7 @@ class AnalyticsEngine:
                     email,
                     phone,
                     partner,
+                    {LEAD_CREATED_DATE_COLUMN},
                     source AS contact_source,
                     LOWER(TRIM(COALESCE(email, ''))) AS norm_email,
                     regexp_replace(COALESCE(CAST(phone AS VARCHAR), ''), '[^0-9]', '', 'g') AS norm_phone
@@ -1967,6 +2005,7 @@ class AnalyticsEngine:
         where, params = self._build_where(filters)
         block_clause = f"{'AND' if where else 'WHERE'} block_amount_paid"
         counsellor = self._counsellor_payment_expr("m.source_at_payment")
+        clash_date = self._counsellor_clash_created_date_sql("p")
         partner_filter = ""
         if partner:
             partner_filter = "AND p.partner = ?"
@@ -1980,6 +2019,7 @@ class AnalyticsEngine:
             INNER JOIN matches m ON p.prospect_id = m.prospect_id
             WHERE p.partner IS NOT NULL
               AND {counsellor}
+              AND {clash_date}
               {partner_filter}
             GROUP BY p.partner
             ORDER BY count DESC
@@ -2001,6 +2041,7 @@ class AnalyticsEngine:
         where, params = self._build_where(filters)
         block_clause = f"{'AND' if where else 'WHERE'} block_amount_paid"
         counsellor = self._counsellor_payment_expr("m.source_at_payment")
+        clash_date = self._counsellor_clash_created_date_sql("p")
         partner_filter = ""
         query_params = list(params)
         if partner:
@@ -2014,6 +2055,7 @@ class AnalyticsEngine:
             SELECT
                 p.prospect_id,
                 p.partner,
+                p.{LEAD_CREATED_DATE_COLUMN},
                 COALESCE(NULLIF(TRIM(p.name), ''), m.sheet_name) AS name,
                 COALESCE(NULLIF(TRIM(p.email), ''), m.sheet_email) AS email,
                 COALESCE(NULLIF(TRIM(CAST(p.phone AS VARCHAR)), ''), m.sheet_phone) AS phone,
@@ -2028,6 +2070,7 @@ class AnalyticsEngine:
             INNER JOIN matches m ON p.prospect_id = m.prospect_id
             WHERE p.partner IS NOT NULL
               AND {counsellor}
+              AND {clash_date}
               {partner_filter}
             ORDER BY p.prospect_id
             LIMIT ?
@@ -2040,13 +2083,7 @@ class AnalyticsEngine:
         self, rows: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Partner-attributed block paid leads with Counsellor as payment source."""
-        clash_rows = [
-            r
-            for r in rows
-            if r.get("match_status") == "matched"
-            and r.get("partner")
-            and self._is_counsellor_payment_source(r.get("source_at_payment"))
-        ]
+        clash_rows = [r for r in rows if self._is_counsellor_clash_lead(r)]
         by_partner: Dict[str, int] = {}
         for r in clash_rows:
             partner = str(r.get("partner") or "Unknown")
@@ -3203,6 +3240,7 @@ class AnalyticsEngine:
                     email,
                     phone,
                     partner,
+                    {LEAD_CREATED_DATE_COLUMN},
                     source AS contact_source,
                     LOWER(TRIM(COALESCE(email, ''))) AS norm_email,
                     regexp_replace(COALESCE(CAST(phone AS VARCHAR), ''), '[^0-9]', '', 'g') AS norm_phone
@@ -3251,6 +3289,7 @@ class AnalyticsEngine:
             SELECT
                 p.prospect_id,
                 p.partner,
+                p.{LEAD_CREATED_DATE_COLUMN},
                 COALESCE(NULLIF(TRIM(p.name), ''), m.sheet_name) AS name,
                 COALESCE(NULLIF(TRIM(p.email), ''), m.sheet_email) AS email,
                 COALESCE(NULLIF(TRIM(CAST(p.phone AS VARCHAR)), ''), m.sheet_phone) AS phone,

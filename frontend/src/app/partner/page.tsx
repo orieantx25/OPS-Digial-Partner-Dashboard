@@ -511,29 +511,22 @@ function PartnerPageInner() {
                 subtitle={`${formatNumber(clashCount)} clashes from block payment backtracking for ${partnerName}`}
               />
               {partnerClashes?.has_sheet ? (
-                clashCount > 0 ? (
-                  leadership ? (
-                    <p className="text-text-secondary text-sm panel p-4">
-                      {formatNumber(clashCount)} counsellor clashes (lead-level list hidden on
-                      leadership view).
-                    </p>
-                  ) : (
-                    <DataTable
-                      data={clashRows}
-                      columns={clashColumns.filter((c) => {
-                        const key = (c as { accessorKey?: string }).accessorKey;
-                        return key !== 'partner';
-                      })}
-                      exportFilename={`${partnerName.replace(/\s+/g, '_')}_counsellor_clashes.csv`}
-                      searchPlaceholder="Search clashes…"
-                      height={320}
-                    />
-                  )
-                ) : (
+                clashCount > 0 && !leadership ? (
+                  <DataTable
+                    data={clashRows}
+                    columns={clashColumns.filter((c) => {
+                      const key = (c as { accessorKey?: string }).accessorKey;
+                      return key !== 'partner';
+                    })}
+                    exportFilename={`${partnerName.replace(/\s+/g, '_')}_counsellor_clashes.csv`}
+                    searchPlaceholder="Search clashes…"
+                    height={320}
+                  />
+                ) : clashCount === 0 ? (
                   <p className="text-text-secondary text-sm panel p-4">
                     No counsellor payment clashes for this partner.
                   </p>
-                )
+                ) : null
               ) : (
                 <p className="text-text-secondary text-sm panel p-4">
                   Upload block amount paid sheet on Block Payment Back tracking tab to detect clashes.

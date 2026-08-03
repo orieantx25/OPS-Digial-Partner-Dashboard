@@ -205,6 +205,7 @@ def publish() -> Path:
             ("geographic_states", engine.get_geographic_state_summary(filters)),
             ("revenue", engine.get_revenue_dashboard(filters)),
             ("predictive", engine.get_predictive_analytics(filters)),
+            ("campus_bifurcation", engine.get_campus_bifurcation(filters)),
             ("block_payment_backtracking", engine.get_block_payment_backtracking(filters)),
             ("block_payment_attribution", engine.get_block_payment_attribution(filters)),
             ("alerts", engine.get_alerts(filters)),

@@ -189,6 +189,7 @@ export const DASHBOARD_PAGES = [
   { id: 'campaign', label: 'Campaign', href: '/campaign', group: 'Ops' },
   { id: 'geographic', label: 'Geographic', href: '/geographic', group: 'Ops' },
   { id: 'block-payment', label: 'Block Payment', href: '/block-payment', group: 'Ops' },
+  { id: 'campus', label: 'Campus', href: '/campus', group: 'Ops' },
   { id: 'revenue', label: 'ROI', href: '/revenue', group: 'Forecast' },
   { id: 'predictive', label: 'Predictive', href: '/predictive', group: 'Forecast' },
   { id: 'upload', label: 'Upload Data', href: '/upload', group: 'Ops' },
@@ -285,4 +286,86 @@ export interface BlockPaymentSheetStatus {
   row_count: number;
   source_filename?: string | null;
   uploaded_at?: string | null;
+}
+
+export interface CampusGenderRow {
+  gender: string;
+  count: number;
+}
+
+export interface CampusBifurcationRow {
+  campus_code: string;
+  campus_name: string;
+  block_paid: number;
+  by_gender: CampusGenderRow[];
+}
+
+export interface CampusGenderChart {
+  campus_code: string;
+  campus_name: string;
+  block_paid: number;
+  gender_chart: ChartData;
+}
+
+export interface CampusShareRow {
+  gender?: string;
+  campus_code?: string;
+  campus_name?: string;
+  count: number;
+  share_pct: number;
+}
+
+export interface CampusMatchedSummary {
+  total: number;
+  by_gender: CampusShareRow[];
+  by_campus: CampusShareRow[];
+}
+
+export interface PartnerShareRow {
+  partner: string;
+  count: number;
+  share_pct: number;
+}
+
+export interface PartnerShareByGenderRow {
+  gender: string;
+  partner: string;
+  count: number;
+  share_of_total_pct: number;
+  share_within_gender_pct: number;
+}
+
+export interface PartnerShareByCampusRow {
+  campus_code: string;
+  campus_name: string;
+  partner: string;
+  count: number;
+  share_of_total_pct: number;
+  share_within_campus_pct: number;
+}
+
+export interface CampusBifurcation {
+  has_sheet: boolean;
+  total_block_paid: number;
+  matched_count: number;
+  sheet_total?: number;
+  digital_partner_count?: number;
+  digital_partner_share_pct?: number;
+  by_campus: CampusBifurcationRow[];
+  by_gender: CampusGenderRow[];
+  sheet_by_campus?: CampusBifurcationRow[];
+  sheet_by_gender?: CampusGenderRow[];
+  campus_gender_charts?: CampusGenderChart[];
+  sheet_campus_gender_charts?: CampusGenderChart[];
+  campus_chart?: ChartData;
+  gender_chart?: ChartData;
+  sheet_campus_chart?: ChartData;
+  sheet_gender_chart?: ChartData;
+  digital_partner_share_chart?: ChartData;
+  matched_summary?: CampusMatchedSummary;
+  partner_share?: PartnerShareRow[];
+  partner_share_by_gender?: PartnerShareByGenderRow[];
+  partner_share_by_campus?: PartnerShareByCampusRow[];
+  partner_gender_chart?: ChartData;
+  partner_campus_chart?: ChartData;
 }

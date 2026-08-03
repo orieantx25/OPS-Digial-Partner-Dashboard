@@ -2,6 +2,7 @@ import {
   AlertItem,
   BlockPaymentBacktracking,
   BlockPaymentSheetStatus,
+  CampusBifurcation,
   ChartData,
   FilterOptions,
   FilterParams,
@@ -148,6 +149,11 @@ const liveApi = {
 
   getPredictive: (filters: FilterParams) =>
     request<Record<string, unknown>>(`/analytics/predictive${buildQuery(filtersToQuery(filters))}`),
+
+  getCampusBifurcation: (filters: FilterParams) =>
+    request<CampusBifurcation>(
+      `/analytics/campus-bifurcation${buildQuery(filtersToQuery(filters))}`
+    ),
 
   getBlockPaymentBacktracking: (filters: FilterParams) =>
     request<BlockPaymentBacktracking>(

@@ -190,6 +190,14 @@ async def block_payment_attribution(
     return engine.get_block_payment_attribution(filters)
 
 
+@router.get("/campus-bifurcation")
+async def campus_bifurcation(
+    filters: FilterParams = Depends(parse_filters),
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    return engine.get_campus_bifurcation(filters)
+
+
 @router.get("/anomalies")
 async def anomalies(
     filters: FilterParams = Depends(parse_filters),

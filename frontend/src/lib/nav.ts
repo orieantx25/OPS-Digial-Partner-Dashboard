@@ -9,6 +9,7 @@ import {
   MapPin,
   IndianRupee,
   TrendingUp,
+  Building2,
   Receipt,
   type LucideIcon,
 } from 'lucide-react';
@@ -26,6 +27,7 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   revenue: IndianRupee,
   predictive: TrendingUp,
   'block-payment': Receipt,
+  campus: Building2,
 };
 
 export const NAV_PAGES = DASHBOARD_PAGES.filter((p) => p.id !== 'upload');

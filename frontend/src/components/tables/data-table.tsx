@@ -28,7 +28,8 @@ interface DataTableProps<T extends object> {
   onRowClick?: (row: T) => void;
   exportFilename?: string;
   searchPlaceholder?: string;
-  height?: number;
+  /** Pixel height, or `'auto'` to fit visible rows (no empty scroll area). */
+  height?: number | 'auto';
   onSearchChange?: (term: string) => void;
   searchValue?: string;
   totalCount?: number;
@@ -123,7 +124,18 @@ export function DataTable<T extends object>({
     downloadBlob(`${headers}\n${body}`, exportFilename);
   }, [rows, table, exportFilename]);
 
-  const resolvedHeight = useCards ? Math.min(height, 420) : height;
+  const ROW_PX = 40;
+  const emptyPx = 64;
+  const contentHeight =
+    rows.length === 0
+      ? emptyPx
+      : Math.min(rows.length * ROW_PX + 4, typeof height === 'number' ? height : 480);
+  const scrollHeight =
+    height === 'auto'
+      ? contentHeight
+      : useCards
+        ? Math.min(height, 420)
+        : height;
 
   return (
     <div className="panel flex flex-col">
@@ -155,7 +167,7 @@ export function DataTable<T extends object>({
       </div>
 
       {useCards ? (
-        <div ref={parentRef} style={{ height: resolvedHeight, overflowY: 'auto' }} className="p-2 space-y-0">
+        <div ref={parentRef} style={{ height: scrollHeight, overflowY: 'auto' }} className="p-2 space-y-0">
           {rows.length === 0 ? (
             <div className="p-8 text-center text-text-secondary text-sm">No data</div>
           ) : (
@@ -217,9 +229,41 @@ export function DataTable<T extends object>({
               ))}
             </div>
 
-            <div ref={parentRef} style={{ height, overflowY: 'auto', overflowX: 'hidden' }}>
+            <div
+              ref={parentRef}
+              style={{
+                height: scrollHeight,
+                overflowY: height === 'auto' ? 'visible' : 'auto',
+                overflowX: 'hidden',
+              }}
+            >
               {rows.length === 0 ? (
                 <div className="p-8 text-center text-text-secondary text-sm">No data</div>
+              ) : height === 'auto' ? (
+                <div>
+                  {rows.map((row) => (
+                    <div
+                      key={row.id}
+                      role="row"
+                      className={cn(
+                        'grid border-b border-border/50 hover:bg-surface items-center',
+                        onRowClick && 'cursor-pointer'
+                      )}
+                      style={{ gridTemplateColumns, minHeight: ROW_PX }}
+                      onClick={() => onRowClick?.(row.original)}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <div
+                          key={cell.id}
+                          role="cell"
+                          className="px-3 py-2 text-sm text-text-secondary truncate min-w-0"
+                        >
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
               ) : (
                 <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
                   {rowVirtualizer.getVirtualItems().map((virtualRow) => {

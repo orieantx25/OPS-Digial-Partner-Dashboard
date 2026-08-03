@@ -80,6 +80,9 @@ export const staticApi = {
 
   getPredictive: (filters: FilterParams) => scoped(filters, 'predictive.json'),
 
+  getCampusBifurcation: (filters: FilterParams) =>
+    scoped(filters, 'campus_bifurcation.json'),
+
   getBlockPaymentBacktracking: (filters: FilterParams) =>
     scoped(filters, 'block_payment_backtracking.json'),
 

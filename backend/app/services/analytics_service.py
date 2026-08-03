@@ -1,6 +1,7 @@
 """SQL-based analytics engine operating on MASTER_DATASET."""
 
 from datetime import date, datetime, timedelta
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.domain.models import AlertItem, ChartData, ChartSeries, FilterParams, KpiMetric, PaginatedResponse
@@ -19,6 +20,7 @@ from app.logging_config import get_logger
 from app.services.empty_defaults import (
     empty_ai_calling,
     empty_alerts,
+    empty_campus_bifurcation,
     empty_chart,
     empty_executive_charts,
     empty_funnel,
@@ -1546,34 +1548,95 @@ class AnalyticsEngine:
             return empty_predictive()
 
         where, params = self._build_where(filters)
+        anchor = self._predictive_anchor_date(filters)
+        current_month = f"{anchor.year:04d}-{anchor.month:02d}"
+
         monthly = self.duck_repo.query_dicts(
             f"""
-            SELECT month,
+            SELECT strftime(CAST(date AS DATE), '%Y-%m') AS month,
                    COUNT(*) AS leads,
                    SUM(CASE WHEN block_amount_paid THEN 1 ELSE 0 END) AS block_amount_paid,
                    SUM(CASE WHEN admission THEN 1 ELSE 0 END) AS admissions
             FROM {MASTER_DATASET_TABLE}
             {where}
-            {"AND" if where else "WHERE"} month IS NOT NULL AND TRIM(CAST(month AS VARCHAR)) <> ''
-            GROUP BY month
-            ORDER BY month
+            {"AND" if where else "WHERE"} date IS NOT NULL
+            GROUP BY 1
+            ORDER BY 1
             """,
             params,
         )
         partner_growth = self.duck_repo.query_dicts(
             f"""
-            SELECT partner, month, COUNT(*) AS leads
+            SELECT partner,
+                   strftime(CAST(date AS DATE), '%Y-%m') AS month,
+                   COUNT(*) AS leads
             FROM {MASTER_DATASET_TABLE}
             {where}
-            {"AND" if where else "WHERE"} partner IS NOT NULL
-            GROUP BY partner, month
+            {"AND" if where else "WHERE"} partner IS NOT NULL AND date IS NOT NULL
+            GROUP BY partner, strftime(CAST(date AS DATE), '%Y-%m')
             ORDER BY month, partner
             """,
             params,
         )
 
-        lead_fc = self._jump_forecast_through_august(monthly, "leads")
-        block_fc = self._jump_forecast_through_august(monthly, "block_amount_paid")
+        month_start = date(anchor.year, anchor.month, 1)
+        from calendar import monthrange
+
+        days_in_month = monthrange(anchor.year, anchor.month)[1]
+        days_elapsed = max(1, anchor.day)
+
+        daily_rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT CAST(date AS DATE) AS dt,
+                   COUNT(*) AS leads,
+                   SUM(CASE WHEN block_amount_paid THEN 1 ELSE 0 END) AS block_amount_paid
+            FROM {MASTER_DATASET_TABLE}
+            {where}
+            {"AND" if where else "WHERE"} date IS NOT NULL
+              AND CAST(date AS DATE) >= DATE '{month_start.isoformat()}'
+              AND CAST(date AS DATE) <= DATE '{anchor.isoformat()}'
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            params,
+        )
+
+        lead_mtd = sum(int(r.get("leads") or 0) for r in daily_rows)
+        block_mtd = sum(int(r.get("block_amount_paid") or 0) for r in daily_rows)
+        lead_run_rate = (
+            round(lead_mtd / days_elapsed * days_in_month) if lead_mtd > 0 else None
+        )
+        block_run_rate = (
+            round(block_mtd / days_elapsed * days_in_month) if block_mtd > 0 else None
+        )
+
+        next_month = self._month_add(current_month, 1)
+        lead_fc = self._forecast_monthly_series(
+            monthly,
+            "leads",
+            anchor,
+            current_month_expected=lead_run_rate,
+        )
+        block_fc = self._forecast_monthly_series(
+            monthly,
+            "block_amount_paid",
+            anchor,
+            current_month_expected=block_run_rate,
+        )
+
+        daily_categories = [str(r["dt"]) for r in daily_rows]
+        daily_lead_chart = ChartData(
+            chart_id="daily_leads_mtd",
+            chart_type="line",
+            title=f"Daily Leads ({current_month})",
+            categories=daily_categories,
+            series=[
+                ChartSeries(
+                    name="Leads",
+                    data=[int(r.get("leads") or 0) for r in daily_rows],
+                ),
+            ],
+        )
 
         return {
             "monthly_history": monthly,
@@ -1584,11 +1647,22 @@ class AnalyticsEngine:
             "avg_block_jump_pct": block_fc["avg_jump_pct"],
             "lead_months_used": lead_fc.get("months_used", 0),
             "block_months_used": block_fc.get("months_used", 0),
-            "forecast_horizon": {"from": "2026-07", "to": "2026-08"},
+            "forecast_horizon": {"from": current_month, "to": next_month},
+            "mtd_run_rate": {
+                "month": current_month,
+                "days_elapsed": days_elapsed,
+                "days_in_month": days_in_month,
+                "lead_mtd": lead_mtd,
+                "lead_projected": lead_run_rate,
+                "block_mtd": block_mtd,
+                "block_projected": block_run_rate,
+            },
+            "daily_history": daily_rows,
+            "daily_lead_chart": daily_lead_chart,
             "lead_chart": ChartData(
                 chart_id="lead_forecast",
                 chart_type="line",
-                title="Lead Forecast (through August)",
+                title="Lead Forecast",
                 categories=lead_fc["categories"],
                 series=[
                     ChartSeries(name="Current Leads", data=lead_fc["current"]),
@@ -1599,7 +1673,7 @@ class AnalyticsEngine:
             "block_amount_chart": ChartData(
                 chart_id="block_amount_forecast",
                 chart_type="line",
-                title="Block Amount Forecast (through August)",
+                title="Block Amount Forecast",
                 categories=block_fc["categories"],
                 series=[
                     ChartSeries(name="Current Block Amount", data=block_fc["current"]),
@@ -1608,6 +1682,14 @@ class AnalyticsEngine:
                 extra={"forecast_style": True},
             ),
         }
+
+    def _predictive_anchor_date(self, filters: FilterParams) -> date:
+        if filters.date_to:
+            try:
+                return date.fromisoformat(str(filters.date_to)[:10])
+            except ValueError:
+                pass
+        return date.today()
 
     def _parse_month_key(self, value: Any) -> Optional[str]:
         raw = str(value or "").strip()
@@ -1667,14 +1749,14 @@ class AnalyticsEngine:
         intercept = y_mean - slope * x_mean
         return max(0.0, intercept + slope * n)
 
-    def _jump_forecast_through_august(
-        self, monthly: List[Dict[str, Any]], field: str
+    def _forecast_monthly_series(
+        self,
+        monthly: List[Dict[str, Any]],
+        field: str,
+        anchor: date,
+        current_month_expected: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """
-        Forecast July–August using all previous months:
-        - MoM jump = mean of every consecutive month pair in history
-        - Blended with a linear trend fitted on the same full history
-        """
+        """Forecast current + next calendar month from history and optional MTD run-rate."""
         rows: List[tuple] = []
         for r in monthly:
             key = self._parse_month_key(r.get("month"))
@@ -1683,65 +1765,65 @@ class AnalyticsEngine:
             rows.append((key, float(r.get(field) or 0)))
         rows.sort(key=lambda x: x[0])
 
+        current_month = f"{anchor.year:04d}-{anchor.month:02d}"
+        next_month = self._month_add(current_month, 1)
+
         if not rows:
+            cur_exp = round(current_month_expected or 0.0, 2)
+            nxt_exp = round(cur_exp, 2)
             return {
-                "categories": [],
-                "current": [],
-                "expected": [],
-                "forecast_points": [],
+                "categories": [current_month, next_month],
+                "current": [None, None],
+                "expected": [cur_exp, nxt_exp],
+                "forecast_points": [
+                    {"period": current_month, "value": cur_exp, "type": "expected"},
+                    {"period": next_month, "value": nxt_exp, "type": "expected"},
+                ],
                 "avg_jump_pct": 0.0,
                 "months_used": 0,
             }
 
-        year = int(rows[-1][0][:4])
-        july = f"{year}-07"
-        august = f"{year}-08"
         start = rows[0][0]
-        # Continuous month list from first history month through August.
         categories: List[str] = []
-        if start > august:
-            categories = [r[0] for r in rows if r[0] <= august]
-        else:
-            cursor = start
-            while cursor <= august:
-                categories.append(cursor)
-                cursor = self._month_add(cursor, 1)
+        cursor = start
+        while cursor <= next_month:
+            categories.append(cursor)
+            cursor = self._month_add(cursor, 1)
 
-        actual_map = {k: v for k, v in rows if k <= august}
+        actual_map = {k: v for k, v in rows}
 
-        # All months before July — include gaps as 0 so the full timeline is used.
-        history_months = [m for m in categories if m < july]
+        history_months = [m for m in categories if m < current_month]
         history_for_jump = [float(actual_map.get(m, 0.0)) for m in history_months]
         if sum(1 for v in history_for_jump if v > 0) < 2:
-            # Fall back to every available actual before August.
-            history_months = [m for m in categories if m < august]
+            history_months = [m for m in categories if m <= current_month and m in actual_map]
             history_for_jump = [float(actual_map.get(m, 0.0)) for m in history_months]
 
         jump = self._average_mom_jump(history_for_jump)
         avg_jump_pct = round((jump - 1.0) * 100, 2)
         linear_next = self._linear_next_from_history(history_for_jump)
 
-        # Base = last month with actual data before the forecast window.
         base_month = None
         for m in reversed(history_months):
-            if actual_map.get(m, 0) > 0 or m in actual_map:
-                if m in actual_map:
-                    base_month = m
-                    break
+            if m in actual_map:
+                base_month = m
+                break
         base_value = float(actual_map.get(base_month, 0.0)) if base_month else (
             next((v for v in reversed(history_for_jump) if v > 0), 0.0)
         )
 
-        jump_july = max(0.0, base_value * jump) if base_value else 0.0
-        if linear_next is not None and base_value > 0:
-            july_expected = round(0.5 * jump_july + 0.5 * linear_next, 2)
+        if current_month_expected is not None:
+            current_expected = round(float(current_month_expected), 2)
+        elif base_value > 0:
+            jump_cur = max(0.0, base_value * jump)
+            if linear_next is not None:
+                current_expected = round(0.5 * jump_cur + 0.5 * linear_next, 2)
+            else:
+                current_expected = round(jump_cur, 2)
         else:
-            july_expected = round(jump_july, 2)
+            current_expected = round(float(actual_map.get(current_month, 0.0)), 2)
 
-        # August continues from July expected using the same all-history jump.
-        august_from_jump = july_expected * jump
+        next_from_jump = current_expected * jump
         if linear_next is not None and len(history_for_jump) >= 2:
-            # Extend the same linear trend one more step beyond July.
             n = len(history_for_jump)
             x_mean = (n - 1) / 2.0
             y_mean = sum(history_for_jump) / n
@@ -1749,14 +1831,14 @@ class AnalyticsEngine:
             den = sum((i - x_mean) ** 2 for i in range(n)) or 1.0
             slope = num / den
             intercept = y_mean - slope * x_mean
-            linear_aug = max(0.0, intercept + slope * (n + 1))
-            august_expected = round(0.5 * august_from_jump + 0.5 * linear_aug, 2)
+            linear_nxt = max(0.0, intercept + slope * (n + 1))
+            next_expected = round(0.5 * next_from_jump + 0.5 * linear_nxt, 2)
         else:
-            august_expected = round(max(0.0, august_from_jump), 2)
+            next_expected = round(max(0.0, next_from_jump), 2)
 
         forecast_points = [
-            {"period": july, "value": july_expected, "type": "expected"},
-            {"period": august, "value": august_expected, "type": "expected"},
+            {"period": current_month, "value": current_expected, "type": "expected"},
+            {"period": next_month, "value": next_expected, "type": "expected"},
         ]
 
         current: List[Any] = []
@@ -1768,10 +1850,10 @@ class AnalyticsEngine:
             else:
                 current.append(None)
 
-            if m == july:
-                expected.append(july_expected)
-            elif m == august:
-                expected.append(august_expected)
+            if m == current_month:
+                expected.append(current_expected)
+            elif m == next_month:
+                expected.append(next_expected)
             elif m == base_month and base_month is not None:
                 expected.append(
                     int(base_value) if base_value == int(base_value) else round(base_value, 2)
@@ -1938,6 +2020,21 @@ class AnalyticsEngine:
         created_on = self._coerce_lead_created_date(row.get(LEAD_CREATED_DATE_COLUMN))
         return created_on is not None and created_on < BLOCK_CLASH_LEAD_CUTOFF
 
+    @staticmethod
+    def _campus_display_label(campus_code: str, campus_name: str) -> str:
+        """Short label for charts/tables, e.g. ADYPU, Pune."""
+        code = str(campus_code or "").strip()
+        name = str(campus_name or "").strip()
+        if not code or code == "(blank)":
+            return name or "(blank)"
+        if "," in name:
+            city = name.rsplit(",", 1)[-1].strip()
+            if city:
+                return f"{code}, {city}"
+        if name and name != "(blank)":
+            return name
+        return code
+
     def _matched_block_payment_cte(self, where: str, block_clause: str) -> str:
         """Shared CTE: block-paid master rows matched to payment sheet by email then phone."""
         return f"""
@@ -1962,6 +2059,8 @@ class AnalyticsEngine:
                     s.source_at_payment,
                     s.campaign_at_payment,
                     s.college_code,
+                    s.college_name,
+                    s.gender,
                     s.full_name AS sheet_name,
                     s.email AS sheet_email,
                     s.phone AS sheet_phone,
@@ -1977,6 +2076,8 @@ class AnalyticsEngine:
                     s.source_at_payment,
                     s.campaign_at_payment,
                     s.college_code,
+                    s.college_name,
+                    s.gender,
                     s.full_name AS sheet_name,
                     s.email AS sheet_email,
                     s.phone AS sheet_phone,
@@ -2823,6 +2924,445 @@ class AnalyticsEngine:
             "by_coupon": top("coupon_code_used"),
             "by_college": top("college_name"),
             "by_original_utm_campaign": top("original_utm_campaign"),
+        }
+
+    def get_campus_bifurcation(self, filters: FilterParams) -> Dict[str, Any]:
+        """Block amount paid by campus and gender (matched payment sheet rows only)."""
+        empty = empty_campus_bifurcation()
+        if not self._has_data():
+            return empty
+        if not self.duck_repo.block_payment_exists():
+            return empty
+
+        where, params = self._build_where(filters)
+        block_clause = f"{'AND' if where else 'WHERE'} block_amount_paid"
+
+        total_row = self.duck_repo.query_dicts(
+            f"SELECT COUNT(*) AS cnt FROM {MASTER_DATASET_TABLE} {where} {block_clause}",
+            params,
+        )
+        total_block_paid = int(total_row[0]["cnt"]) if total_row else 0
+
+        cte = self._matched_block_payment_cte(where, block_clause)
+        detail_rows = self.duck_repo.query_dicts(
+            f"""
+            {cte}
+            SELECT
+                COALESCE(NULLIF(TRIM(CAST(m.college_code AS VARCHAR)), ''), '(blank)') AS campus_code,
+                COALESCE(
+                    NULLIF(TRIM(CAST(m.college_name AS VARCHAR)), ''),
+                    NULLIF(TRIM(CAST(m.college_code AS VARCHAR)), ''),
+                    '(blank)'
+                ) AS campus_name,
+                COALESCE(NULLIF(TRIM(CAST(m.gender AS VARCHAR)), ''), '(blank)') AS gender,
+                COUNT(*) AS count
+            FROM paid p
+            INNER JOIN matches m ON p.prospect_id = m.prospect_id
+            GROUP BY 1, 2, 3
+            ORDER BY count DESC
+            """,
+            params,
+        )
+
+        matched_count = sum(int(r.get("count") or 0) for r in detail_rows)
+
+        sheet_total_rows = self.duck_repo.query_dicts(
+            f"SELECT COUNT(*) AS cnt FROM {BLOCK_PAYMENT_TABLE}"
+        )
+        sheet_total = int(sheet_total_rows[0]["cnt"]) if sheet_total_rows else 0
+        digital_partner_count = matched_count
+        other_block_count = max(0, sheet_total - digital_partner_count)
+        dp_share_pct = (
+            round(digital_partner_count / sheet_total * 100, 2) if sheet_total else 0.0
+        )
+
+        digital_partner_share_chart = ChartData(
+            chart_id="digital_partner_block_share",
+            chart_type="donut",
+            title="Block amount received — digital partner share",
+            categories=["Digital partners", "Other"],
+            series=[
+                ChartSeries(
+                    name="Block paid",
+                    data=[digital_partner_count, other_block_count],
+                )
+            ],
+            extra={
+                "center_total": sheet_total,
+                "center_label": "All received",
+                "compact_donut": True,
+                "show_slice_labels": True,
+            },
+        )
+
+        # Full payment sheet — all block amounts (not limited to digital-partner matches).
+        sheet_detail_rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                COALESCE(NULLIF(TRIM(CAST(college_code AS VARCHAR)), ''), '(blank)') AS campus_code,
+                COALESCE(
+                    NULLIF(TRIM(CAST(college_name AS VARCHAR)), ''),
+                    NULLIF(TRIM(CAST(college_code AS VARCHAR)), ''),
+                    '(blank)'
+                ) AS campus_name,
+                COALESCE(NULLIF(TRIM(CAST(gender AS VARCHAR)), ''), '(blank)') AS gender,
+                COUNT(*) AS count
+            FROM {BLOCK_PAYMENT_TABLE}
+            GROUP BY 1, 2, 3
+            ORDER BY count DESC
+            """
+        )
+
+        sheet_campus_map: Dict[str, Dict[str, Any]] = {}
+        sheet_gender_totals: Dict[str, int] = {}
+        for r in sheet_detail_rows:
+            code = str(r.get("campus_code") or "(blank)")
+            name = self._campus_display_label(code, str(r.get("campus_name") or code))
+            gender = str(r.get("gender") or "(blank)")
+            cnt = int(r.get("count") or 0)
+            sheet_gender_totals[gender] = sheet_gender_totals.get(gender, 0) + cnt
+            if code not in sheet_campus_map:
+                sheet_campus_map[code] = {
+                    "campus_code": code,
+                    "campus_name": name,
+                    "block_paid": 0,
+                    "by_gender": [],
+                }
+            sheet_campus_map[code]["block_paid"] += cnt
+            sheet_campus_map[code]["by_gender"].append({"gender": gender, "count": cnt})
+
+        sheet_by_campus = sorted(
+            sheet_campus_map.values(), key=lambda x: x["block_paid"], reverse=True
+        )
+        sheet_by_gender = [
+            {"gender": g, "count": c}
+            for g, c in sorted(sheet_gender_totals.items(), key=lambda x: x[1], reverse=True)
+        ]
+        sheet_campus_labels = [
+            str(c["campus_name"]) if c["campus_name"] != "(blank)" else c["campus_code"]
+            for c in sheet_by_campus
+        ]
+        sheet_campus_counts = [int(c["block_paid"]) for c in sheet_by_campus]
+
+        slice_extra = {
+            "center_label": "Total",
+            "compact_donut": True,
+            "show_slice_labels": True,
+        }
+        sheet_campus_chart = ChartData(
+            chart_id="sheet_campus_block_paid",
+            chart_type="bar",
+            title="All block received by campus",
+            categories=sheet_campus_labels[:20],
+            series=[ChartSeries(name="Block Paid", data=sheet_campus_counts[:20])],
+        )
+        sheet_gender_chart = ChartData(
+            chart_id="sheet_gender_block_paid",
+            chart_type="donut",
+            title="All block received by gender",
+            categories=[g["gender"] for g in sheet_by_gender],
+            series=[
+                ChartSeries(name="Block Paid", data=[g["count"] for g in sheet_by_gender])
+            ],
+            extra={
+                **slice_extra,
+                "center_total": sheet_total,
+                "center_label": "All received",
+            },
+        )
+        sheet_campus_gender_charts = []
+        for c in sheet_by_campus:
+            genders = c.get("by_gender") or []
+            if not genders:
+                continue
+            code = str(c.get("campus_code") or "campus")
+            slug = re.sub(r"[^\w\-]+", "_", code.strip(), flags=re.UNICODE).strip("_") or "campus"
+            name = str(c.get("campus_name") or code)
+            block_paid = int(c.get("block_paid") or 0)
+            sheet_campus_gender_charts.append({
+                "campus_code": code,
+                "campus_name": name,
+                "block_paid": block_paid,
+                "gender_chart": ChartData(
+                    chart_id=f"sheet_campus_gender_{slug}",
+                    chart_type="donut",
+                    title=name[:80],
+                    categories=[g["gender"] for g in genders],
+                    series=[
+                        ChartSeries(name="Block Paid", data=[g["count"] for g in genders])
+                    ],
+                    extra={
+                        **slice_extra,
+                        "center_total": block_paid,
+                    },
+                ),
+            })
+
+        campus_map: Dict[str, Dict[str, Any]] = {}
+        gender_totals: Dict[str, int] = {}
+
+        for r in detail_rows:
+            code = str(r.get("campus_code") or "(blank)")
+            name = self._campus_display_label(code, str(r.get("campus_name") or code))
+            gender = str(r.get("gender") or "(blank)")
+            cnt = int(r.get("count") or 0)
+            gender_totals[gender] = gender_totals.get(gender, 0) + cnt
+
+            if code not in campus_map:
+                campus_map[code] = {
+                    "campus_code": code,
+                    "campus_name": name,
+                    "block_paid": 0,
+                    "by_gender": [],
+                }
+            campus_map[code]["block_paid"] += cnt
+            campus_map[code]["by_gender"].append({"gender": gender, "count": cnt})
+
+        by_campus = sorted(campus_map.values(), key=lambda x: x["block_paid"], reverse=True)
+        by_gender = [
+            {"gender": g, "count": c}
+            for g, c in sorted(gender_totals.items(), key=lambda x: x[1], reverse=True)
+        ]
+
+        campus_labels = [
+            str(c["campus_name"]) if c["campus_name"] != "(blank)" else c["campus_code"]
+            for c in by_campus
+        ]
+        campus_counts = [int(c["block_paid"]) for c in by_campus]
+
+        campus_gender_charts = []
+        for c in by_campus:
+            genders = c.get("by_gender") or []
+            if not genders:
+                continue
+            code = str(c.get("campus_code") or "campus")
+            slug = re.sub(r"[^\w\-]+", "_", code.strip(), flags=re.UNICODE).strip("_") or "campus"
+            name = str(c.get("campus_name") or code)
+            block_paid = int(c.get("block_paid") or 0)
+            campus_gender_charts.append({
+                "campus_code": code,
+                "campus_name": name,
+                "block_paid": block_paid,
+                "gender_chart": ChartData(
+                    chart_id=f"campus_gender_{slug}",
+                    chart_type="donut",
+                    title=name[:80],
+                    categories=[g["gender"] for g in genders],
+                    series=[
+                        ChartSeries(name="Block Paid", data=[g["count"] for g in genders])
+                    ],
+                    extra={
+                        **slice_extra,
+                        "center_total": block_paid,
+                    },
+                ),
+            })
+
+        def share_pct(n: int, d: int) -> float:
+            return round(n / d * 100, 2) if d else 0.0
+
+        matched_summary = {
+            "total": matched_count,
+            "by_gender": [
+                {
+                    "gender": g["gender"],
+                    "count": g["count"],
+                    "share_pct": share_pct(g["count"], matched_count),
+                }
+                for g in by_gender
+            ],
+            "by_campus": [
+                {
+                    "campus_code": c["campus_code"],
+                    "campus_name": c["campus_name"],
+                    "count": c["block_paid"],
+                    "share_pct": share_pct(c["block_paid"], matched_count),
+                }
+                for c in by_campus
+            ],
+        }
+
+        partner_rows = self.duck_repo.query_dicts(
+            f"""
+            {cte}
+            SELECT
+                p.partner AS partner,
+                COALESCE(NULLIF(TRIM(CAST(m.gender AS VARCHAR)), ''), '(blank)') AS gender,
+                COALESCE(NULLIF(TRIM(CAST(m.college_code AS VARCHAR)), ''), '(blank)') AS campus_code,
+                COALESCE(
+                    NULLIF(TRIM(CAST(m.college_name AS VARCHAR)), ''),
+                    NULLIF(TRIM(CAST(m.college_code AS VARCHAR)), ''),
+                    '(blank)'
+                ) AS campus_name,
+                COUNT(*) AS count
+            FROM paid p
+            INNER JOIN matches m ON p.prospect_id = m.prospect_id
+            WHERE p.partner IS NOT NULL
+            GROUP BY 1, 2, 3, 4
+            """,
+            params,
+        )
+
+        canonical_partner_rows = [
+            r for r in partner_rows if str(r.get("partner") or "") in PARTNER_CANONICAL
+        ]
+
+        partner_totals: Dict[str, int] = {}
+        gender_partner_map: Dict[str, Dict[str, int]] = {}
+        campus_partner_map: Dict[str, Dict[str, int]] = {}
+
+        for r in canonical_partner_rows:
+            partner = str(r.get("partner") or "")
+            gender = str(r.get("gender") or "(blank)")
+            campus_code = str(r.get("campus_code") or "(blank)")
+            cnt = int(r.get("count") or 0)
+            partner_totals[partner] = partner_totals.get(partner, 0) + cnt
+            gender_partner_map.setdefault(gender, {})[partner] = (
+                gender_partner_map.get(gender, {}).get(partner, 0) + cnt
+            )
+            campus_partner_map.setdefault(campus_code, {})[partner] = (
+                campus_partner_map.get(campus_code, {}).get(partner, 0) + cnt
+            )
+
+        partner_share = [
+            {
+                "partner": p,
+                "count": c,
+                "share_pct": share_pct(c, matched_count),
+            }
+            for p, c in sorted(partner_totals.items(), key=lambda x: x[1], reverse=True)
+        ]
+
+        gender_totals_map = {g["gender"]: g["count"] for g in by_gender}
+        campus_totals_map = {c["campus_code"]: c["block_paid"] for c in by_campus}
+        campus_display_map = {c["campus_code"]: c["campus_name"] for c in by_campus}
+
+        partner_share_by_gender: List[Dict[str, Any]] = []
+        for r in canonical_partner_rows:
+            gender = str(r.get("gender") or "(blank)")
+            partner = str(r.get("partner") or "")
+            cnt = int(r.get("count") or 0)
+            partner_share_by_gender.append({
+                "gender": gender,
+                "partner": partner,
+                "count": cnt,
+                "share_of_total_pct": share_pct(cnt, matched_count),
+                "share_within_gender_pct": share_pct(cnt, gender_totals_map.get(gender, 0)),
+            })
+        partner_share_by_gender.sort(
+            key=lambda x: (-x["count"], x["gender"], x["partner"])
+        )
+
+        partner_share_by_campus: List[Dict[str, Any]] = []
+        for r in canonical_partner_rows:
+            campus_code = str(r.get("campus_code") or "(blank)")
+            raw_name = str(r.get("campus_name") or campus_code)
+            campus_name = campus_display_map.get(
+                campus_code,
+                self._campus_display_label(campus_code, raw_name),
+            )
+            partner = str(r.get("partner") or "")
+            cnt = int(r.get("count") or 0)
+            partner_share_by_campus.append({
+                "campus_code": campus_code,
+                "campus_name": campus_name,
+                "partner": partner,
+                "count": cnt,
+                "share_of_total_pct": share_pct(cnt, matched_count),
+                "share_within_campus_pct": share_pct(cnt, campus_totals_map.get(campus_code, 0)),
+            })
+        partner_share_by_campus.sort(
+            key=lambda x: (-x["count"], x["campus_name"], x["partner"])
+        )
+
+        partners_ordered = sorted(
+            partner_totals.keys(), key=lambda p: partner_totals[p], reverse=True
+        )
+        gender_categories = [g["gender"] for g in by_gender]
+        campus_chart_categories = campus_labels[:20]
+        campus_label_to_code = {
+            str(c["campus_name"]) if c["campus_name"] != "(blank)" else c["campus_code"]: c[
+                "campus_code"
+            ]
+            for c in by_campus
+        }
+
+        partner_gender_chart = ChartData(
+            chart_id="partner_share_gender",
+            chart_type="bar",
+            title="Partner share by gender",
+            categories=gender_categories,
+            series=[
+                ChartSeries(
+                    name=p,
+                    data=[
+                        gender_partner_map.get(g, {}).get(p, 0) for g in gender_categories
+                    ],
+                )
+                for p in partners_ordered
+            ],
+        )
+
+        partner_campus_chart = ChartData(
+            chart_id="partner_share_campus",
+            chart_type="bar",
+            title="Partner share by campus",
+            categories=campus_chart_categories,
+            series=[
+                ChartSeries(
+                    name=p,
+                    data=[
+                        campus_partner_map.get(
+                            campus_label_to_code.get(label, ""),
+                            {},
+                        ).get(p, 0)
+                        for label in campus_chart_categories
+                    ],
+                )
+                for p in partners_ordered
+            ],
+        )
+
+        return {
+            "has_sheet": True,
+            "total_block_paid": total_block_paid,
+            "matched_count": matched_count,
+            "sheet_total": sheet_total,
+            "digital_partner_count": digital_partner_count,
+            "digital_partner_share_pct": dp_share_pct,
+            "sheet_by_campus": sheet_by_campus,
+            "sheet_by_gender": sheet_by_gender,
+            "sheet_campus_chart": sheet_campus_chart,
+            "sheet_gender_chart": sheet_gender_chart,
+            "sheet_campus_gender_charts": sheet_campus_gender_charts,
+            "by_campus": by_campus,
+            "by_gender": by_gender,
+            "matched_summary": matched_summary,
+            "partner_share": partner_share,
+            "partner_share_by_gender": partner_share_by_gender,
+            "partner_share_by_campus": partner_share_by_campus,
+            "campus_gender_charts": campus_gender_charts,
+            "digital_partner_share_chart": digital_partner_share_chart,
+            "campus_chart": ChartData(
+                chart_id="campus_block_paid",
+                chart_type="bar",
+                title="Block Amount Paid by Campus",
+                categories=campus_labels[:20],
+                series=[ChartSeries(name="Block Paid", data=campus_counts[:20])],
+            ),
+            "gender_chart": ChartData(
+                chart_id="gender_block_paid",
+                chart_type="donut",
+                title="Block Amount Paid by Gender",
+                categories=[g["gender"] for g in by_gender],
+                series=[ChartSeries(name="Block Paid", data=[g["count"] for g in by_gender])],
+                extra={
+                    **slice_extra,
+                    "center_total": matched_count,
+                },
+            ),
+            "partner_gender_chart": partner_gender_chart,
+            "partner_campus_chart": partner_campus_chart,
         }
 
     def get_anomalies(self, filters: FilterParams) -> List[AlertItem]:

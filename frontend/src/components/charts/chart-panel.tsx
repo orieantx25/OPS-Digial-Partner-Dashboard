@@ -759,7 +759,19 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
     }
 
     case 'donut':
-    case 'pie':
+    case 'pie': {
+      const centerTotal = chart.extra?.center_total;
+      const centerLabel = String(chart.extra?.center_label ?? 'Total');
+      const compactDonut = Boolean(chart.extra?.compact_donut);
+      const showSliceLabels = Boolean(chart.extra?.show_slice_labels);
+      const showCenter =
+        centerTotal !== undefined && centerTotal !== null && !Number.isNaN(Number(centerTotal));
+
+      const sliceLabelFormatter = (p: { name: string; value: number; percent: number }) =>
+        compactDonut
+          ? `${formatNumber(p.value)} (${p.percent.toFixed(0)}%)`
+          : `${p.name}\n${formatNumber(p.value)} · ${p.percent.toFixed(0)}%`;
+
       return {
         ...THEME,
         title: { show: false, text: '' },
@@ -778,6 +790,33 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
           formatter: (params: { name: string; value: number; percent: number }) =>
             `${params.name}: <strong>${formatNumber(params.value)}</strong> (${params.percent.toFixed(1)}%)`,
         },
+        graphic: showCenter
+          ? [
+              {
+                type: 'text',
+                left: 'center',
+                top: '40%',
+                style: {
+                  text: formatNumber(Number(centerTotal)),
+                  textAlign: 'center',
+                  fill: '#E5E5E5',
+                  fontSize: 22,
+                  fontWeight: 600,
+                },
+              },
+              {
+                type: 'text',
+                left: 'center',
+                top: '50%',
+                style: {
+                  text: centerLabel,
+                  textAlign: 'center',
+                  fill: '#B5B5B5',
+                  fontSize: 11,
+                },
+              },
+            ]
+          : undefined,
         series: [{
           type: 'pie',
           radius: chart.chart_type === 'donut' ? ['40%', '64%'] : ['0%', '64%'],
@@ -789,15 +828,23 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
             value: chart.series[0]?.data[i],
           })),
           itemStyle: { borderWidth: 0 },
-          label: {
-            color: '#D5D5D5',
-            fontSize: 11,
-            formatter: (p: { name: string; value: number; percent: number }) =>
-              `${p.name}\n${formatNumber(p.value)} · ${p.percent.toFixed(0)}%`,
-          },
-          labelLine: { length: 10, length2: 8, lineStyle: { color: '#3A3A3A' } },
+          label:
+            compactDonut && !showSliceLabels
+              ? { show: false }
+              : {
+                  color: '#D5D5D5',
+                  fontSize: compactDonut ? 10 : 11,
+                  formatter: sliceLabelFormatter,
+                },
+          labelLine:
+            compactDonut && !showSliceLabels
+              ? { show: false }
+              : compactDonut && showSliceLabels
+                ? { show: false }
+                : { length: 10, length2: 8, lineStyle: { color: '#3A3A3A' } },
         }],
       };
+    }
 
     case 'funnel': {
       const counts = (chart.series[0]?.data ?? []).map((v) => Number(v) || 0);
@@ -988,7 +1035,12 @@ export function ChartPanel({
       {!hasData ? (
         <div style={{ height: resolvedHeight }} className="flex flex-col">
           {displayChart.title ? (
-            <div className="text-sm font-semibold text-text mb-2">{displayChart.title}</div>
+            <div
+              className="text-sm font-semibold text-text mb-2 min-w-0 truncate"
+              title={displayChart.title}
+            >
+              {displayChart.title}
+            </div>
           ) : null}
           <div className="flex-1 flex items-center justify-center text-text-secondary text-sm border border-border border-dashed">
             No data available
@@ -999,7 +1051,12 @@ export function ChartPanel({
           {(displayChart.title || mixedScale) && (
           <div className="flex items-start justify-between gap-2 mb-2">
             {displayChart.title ? (
-              <div className="text-sm font-semibold text-text shrink-0">{displayChart.title}</div>
+              <div
+                className="text-sm font-semibold text-text min-w-0 flex-1 truncate"
+                title={displayChart.title}
+              >
+                {displayChart.title}
+              </div>
             ) : (
               <div />
             )}

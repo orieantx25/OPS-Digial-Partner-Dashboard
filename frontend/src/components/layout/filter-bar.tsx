@@ -4,6 +4,7 @@ import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useSt
 import { createPortal } from 'react-dom';
 import { ChevronDown, X, RotateCcw, Upload, SlidersHorizontal } from 'lucide-react';
 import { LeadSquaredSyncButton } from '@/components/sync/leadsquared-sync-button';
+import { DatasetHeaderMeta } from '@/components/layout/dataset-header-meta';
 import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { api } from '@/lib/api';
 import {
@@ -24,6 +25,8 @@ import { useAppStore } from '@/store/app-store';
 import { useUploadStore } from '@/store/upload-store';
 import { FilterOptions, FilterParams } from '@/types';
 import { cn } from '@/lib/utils';
+
+const LSQ_SYNC_ENABLED = process.env.NEXT_PUBLIC_ENABLE_LSQ_SYNC === 'true';
 
 function MultiSelect({
   label,
@@ -298,6 +301,8 @@ export function FilterBar() {
   const isAllTime =
     activePreset === 'all' || (!filters.date_from && !filters.date_to);
 
+  const showHeaderSync = !leadership && LSQ_SYNC_ENABLED;
+
   const presetChipClass = (active: boolean) =>
     cn(
       'min-h-[40px] px-3 text-xs whitespace-nowrap border border-border',
@@ -334,6 +339,11 @@ export function FilterBar() {
     <div className="sticky top-14 z-30 bg-bg border-b border-border lg:top-0">
       {/* Mobile: wrapping preset chips */}
       <div className="lg:hidden px-3 py-2 space-y-2">
+        <DatasetHeaderMeta
+          filters={filters}
+          manifest={manifest}
+          showSyncButton={showHeaderSync}
+        />
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={applyAllTime} className={presetChipClass(isAllTime)}>
             All time
@@ -380,6 +390,11 @@ export function FilterBar() {
 
       {/* Desktop toolbar */}
       <div className="hidden lg:flex items-end gap-3 px-4 py-2 overflow-x-auto">
+        <DatasetHeaderMeta
+          filters={filters}
+          manifest={manifest}
+          showSyncButton={showHeaderSync}
+        />
         {!leadership && (
           <>
             <div className="flex flex-col gap-0.5 min-w-[120px]">
@@ -480,7 +495,7 @@ export function FilterBar() {
               <RotateCcw className="w-3 h-3" /> Reset
             </button>
           </div>
-          {!leadership && <LeadSquaredSyncButton />}
+          {!showHeaderSync && <LeadSquaredSyncButton />}
           {canUpload() && (
             <div className="flex flex-col gap-0.5">
               <label className="text-[10px] uppercase tracking-wide text-text-secondary opacity-0 select-none">

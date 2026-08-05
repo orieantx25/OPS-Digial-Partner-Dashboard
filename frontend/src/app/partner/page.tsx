@@ -5,9 +5,10 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { ColumnDef } from '@tanstack/react-table';
 import { api } from '@/lib/api';
 import { useFetch } from '@/hooks/use-fetch';
+import { useChartHeight } from '@/hooks/use-chart-height';
 import { useAppStore, useEffectiveFilters } from '@/store/app-store';
 import { ChartPanel } from '@/components/charts/chart-panel';
-import { ChartData, PartnerCounsellorClash, PartnerCounsellorClashes } from '@/types';
+import { ChartData, PartnerCounsellorClash, PartnerCounsellorClashes, PartnerDpRefundRow, PartnerDpRefunds } from '@/types';
 import { DataTable, useLeadColumns } from '@/components/tables/data-table';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { ClickableMetricBox } from '@/components/dashboard/clickable-metric-box';
@@ -26,6 +27,8 @@ interface PartnerDetail {
     pct: number;
   }[];
   block_counsellor_clashes?: PartnerCounsellorClashes;
+  block_dp_refunds?: PartnerDpRefunds;
+  dp_refunds?: number;
   performance_score?: number;
   trend?: { month?: string; leads?: number }[];
   daily_leads?: ChartData;
@@ -131,7 +134,24 @@ function useClashColumns(): ColumnDef<PartnerCounsellorClash>[] {
   );
 }
 
-export default function PartnerPage() {
+function useDpRefundColumns(): ColumnDef<PartnerDpRefundRow>[] {
+  return useMemo(
+    () => [
+      { accessorKey: 'prospect_id', header: 'ID', meta: { width: '9%' } },
+      { accessorKey: 'partner', header: 'Partner', meta: { width: '11%' } },
+      { accessorKey: 'name', header: 'Name', meta: { width: '12%' } },
+      { accessorKey: 'email', header: 'Email', meta: { width: '14%' } },
+      { accessorKey: 'phone', header: 'Phone', meta: { width: '10%' } },
+      { accessorKey: 'final_status', header: 'Final Status', meta: { width: '11%' } },
+      { accessorKey: 'campus', header: 'Campus', meta: { width: '9%' } },
+      { accessorKey: 'university', header: 'University', meta: { width: '10%' } },
+      { accessorKey: 'utr', header: 'UTR', meta: { width: '10%' } },
+    ],
+    []
+  );
+}
+
+function PartnerPage() {
   return (
     <Suspense
       fallback={
@@ -156,7 +176,13 @@ function PartnerPageInner() {
   const openExplorer = useLeadExplorerStore((s) => s.openExplorer);
   const leadColumns = useLeadColumns();
   const clashColumns = useClashColumns();
+  const dpRefundColumns = useDpRefundColumns();
   const leadership = isLeadershipMode();
+  const comparisonHeight = useChartHeight(360, 280);
+  const trendHeight = useChartHeight(320, 260);
+  const detailChartHeight = useChartHeight(300, 240);
+  const tableHeight = useChartHeight(360, 280);
+  const conversionTableHeight = useChartHeight(280, 240);
 
   useEffect(() => {
     if (partnerFromUrl) {
@@ -189,6 +215,12 @@ function PartnerPageInner() {
     enabled: !selectedPartner,
   });
 
+  const { data: dpRefunds } = useFetch({
+    fetcher: () => api.getPartnerDpRefunds(filters),
+    deps: [JSON.stringify(filters)],
+    enabled: !selectedPartner,
+  });
+
   const { data: conversionRates } = useFetch({
     fetcher: () => api.getConversionRates(filters),
     deps: [JSON.stringify(filters)],
@@ -209,6 +241,14 @@ function PartnerPageInner() {
     return m;
   }, [clashes?.by_partner]);
 
+  const refundCountByPartner = useMemo(() => {
+    const m: Record<string, number> = {};
+    (dpRefunds?.by_partner ?? []).forEach(({ partner, count }) => {
+      m[partner] = count;
+    });
+    return m;
+  }, [dpRefunds?.by_partner]);
+
   const seriesByName = useMemo(() => {
     const m: Record<string, number[]> = {};
     (comparison?.series ?? []).forEach((s) => {
@@ -222,18 +262,21 @@ function PartnerPageInner() {
     const totals = (comparison.extra?.block_amount_total as number[] | undefined) ?? [];
     return comparison.categories.map((partner, i) => {
       const clean = seriesByName['Block Amount']?.[i] ?? 0;
-      const clashes =
+      const clashCount =
         seriesByName['Counsellor Clashes']?.[i] ?? clashCountByPartner[partner] ?? 0;
+      const dpRefundCount =
+        seriesByName['DP Refunds']?.[i] ?? refundCountByPartner[partner] ?? 0;
       return {
         partner,
         leads: seriesByName['Leads']?.[i] ?? 0,
         offer_letter: seriesByName['Offer Letter']?.[i] ?? 0,
-        block_amount: totals[i] ?? clean + clashes,
-        counsellor_clashes: clashes,
+        block_amount: totals[i] ?? clean + clashCount + dpRefundCount,
+        counsellor_clashes: clashCount,
+        dp_refunds: dpRefundCount,
         admissions: seriesByName['Admissions']?.[i] ?? 0,
       };
     });
-  }, [comparison, seriesByName, clashCountByPartner]);
+  }, [comparison, seriesByName, clashCountByPartner, refundCountByPartner]);
 
   const columns: ColumnDef<Record<string, unknown>>[] = [
     { accessorKey: 'partner', header: 'Partner' },
@@ -249,6 +292,22 @@ function PartnerPageInner() {
           <span
             className={cn(
               count > 0 && 'text-amber-300 font-semibold kpi-value'
+            )}
+          >
+            {formatNumber(count)}
+          </span>
+        );
+      },
+    },
+    {
+      accessorKey: 'dp_refunds',
+      header: 'DP Refunds',
+      cell: ({ getValue }) => {
+        const count = Number(getValue() || 0);
+        return (
+          <span
+            className={cn(
+              count > 0 && 'text-orange-300 font-semibold kpi-value'
             )}
           >
             {formatNumber(count)}
@@ -281,6 +340,9 @@ function PartnerPageInner() {
   const partnerClashes = detail?.block_counsellor_clashes;
   const clashRows = partnerClashes?.rows ?? [];
   const clashCount = partnerClashes?.total_clashes ?? 0;
+  const partnerDpRefunds = detail?.block_dp_refunds;
+  const refundRows = partnerDpRefunds?.rows ?? [];
+  const refundCount = detail?.dp_refunds ?? partnerDpRefunds?.total_refunds ?? 0;
 
   const contactStageColumns: ColumnDef<{
     contact_stage: string;
@@ -325,7 +387,7 @@ function PartnerPageInner() {
         <>
           <ChartPanel
             chart={comparison}
-            height={360}
+            height={comparisonHeight}
             onCategoryClick={(partner) => {
               selectPartner(partner);
             }}
@@ -349,7 +411,7 @@ function PartnerPageInner() {
               selectPartner(String(row.partner));
             }}
             exportFilename="partner_conversion_rates.csv"
-            height={280}
+            height={conversionTableHeight}
           />
 
           <SectionHeader
@@ -387,13 +449,49 @@ function PartnerPageInner() {
                   columns={clashColumns}
                   exportFilename="partner_counsellor_clashes.csv"
                   searchPlaceholder="Search clashes…"
-                  height={360}
+                  height={tableHeight}
                 />
               )}
             </>
           ) : (
             <p className="text-text-secondary text-sm panel p-4">
               Counsellor clash detection requires the block amount paid payment sheet.
+            </p>
+          )}
+
+          <SectionHeader
+            title="Digital Partner Refunds"
+            subtitle={
+              dpRefunds?.has_sheet
+                ? 'Refund sheet matches to block-paid digital partner leads'
+                : 'Sync refund sheet on Sync LSQ or upload on Refunds tab'
+            }
+          />
+
+          {dpRefunds?.has_sheet ? (
+            <>
+              <div className="panel grid grid-cols-2 md:grid-cols-3 gap-px bg-border max-w-xl">
+                <div className="bg-surface px-4 py-3 ring-1 ring-inset ring-orange-500/50 bg-orange-500/5">
+                  <div className="text-[10px] uppercase tracking-widest text-orange-300">
+                    Total DP Refunds
+                  </div>
+                  <div className="text-lg font-semibold text-orange-300 kpi-value mt-1">
+                    {formatNumber(dpRefunds.total_refunds)}
+                  </div>
+                </div>
+                <div className="bg-surface px-4 py-3">
+                  <div className="text-[10px] uppercase tracking-widest text-text-secondary">
+                    Partners Affected
+                  </div>
+                  <div className="text-lg font-semibold text-text kpi-value mt-1">
+                    {formatNumber(dpRefunds.by_partner.length)}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-text-secondary text-sm panel p-4">
+              DP refund tracking requires the refund cases sheet.
             </p>
           )}
         </>
@@ -446,6 +544,22 @@ function PartnerPageInner() {
                     Block paid · Counsellor at payment
                   </div>
                 </div>
+                <div
+                  className={cn(
+                    'px-3 py-2.5 border-r border-b border-border text-left',
+                    refundCount > 0 && 'bg-orange-500/5'
+                  )}
+                >
+                  <div className="text-[10px] text-orange-300 uppercase tracking-wide mb-1">
+                    DP Refunds
+                  </div>
+                  <div className="kpi-value text-xl font-semibold text-orange-300">
+                    {formatNumber(refundCount)}
+                  </div>
+                  <div className="text-[10px] text-text-secondary mt-0.5">
+                    Block paid · refund processed
+                  </div>
+                </div>
               </div>
 
               <div className="text-sm text-text-secondary">
@@ -480,7 +594,7 @@ function PartnerPageInner() {
               />
               <ChartPanel
                 chart={resolvePartnerTrendChart(detail, partnerTrend, partnerName)}
-                height={320}
+                height={trendHeight}
               />
 
               <SectionHeader
@@ -490,14 +604,14 @@ function PartnerPageInner() {
               {contactStageSummary.length > 0 ? (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                   {contactStageChart && (
-                    <ChartPanel chart={contactStageChart} height={300} />
+                    <ChartPanel chart={contactStageChart} height={detailChartHeight} />
                   )}
                   <DataTable
                     data={contactStageSummary}
                     columns={contactStageColumns}
                     exportFilename={`${partnerName.replace(/\s+/g, '_')}_contact_stages.csv`}
                     searchPlaceholder="Search contact stages…"
-                    height={300}
+                    height={detailChartHeight}
                   />
                 </div>
               ) : (
@@ -520,16 +634,53 @@ function PartnerPageInner() {
                     })}
                     exportFilename={`${partnerName.replace(/\s+/g, '_')}_counsellor_clashes.csv`}
                     searchPlaceholder="Search clashes…"
-                    height={320}
+                    height={tableHeight}
                   />
                 ) : clashCount === 0 ? (
                   <p className="text-text-secondary text-sm panel p-4">
                     No counsellor payment clashes for this partner.
                   </p>
-                ) : null
+                ) : (
+                  <p className="text-text-secondary text-sm panel p-4">
+                    {formatNumber(clashCount)} counsellor clash(es) on block-paid leads. Open the
+                    ops dashboard for searchable lead detail.
+                  </p>
+                )
               ) : (
                 <p className="text-text-secondary text-sm panel p-4">
                   Upload block amount paid sheet on Block Payment Back tracking tab to detect clashes.
+                </p>
+              )}
+
+              <SectionHeader
+                title="Digital Partner Refunds"
+                subtitle={`${formatNumber(refundCount)} refund(s) matched to block-paid leads for ${partnerName}`}
+              />
+              {partnerDpRefunds?.has_sheet ? (
+                refundCount > 0 && !leadership ? (
+                  <DataTable
+                    data={refundRows}
+                    columns={dpRefundColumns.filter((c) => {
+                      const key = (c as { accessorKey?: string }).accessorKey;
+                      return key !== 'partner';
+                    })}
+                    exportFilename={`${partnerName.replace(/\s+/g, '_')}_dp_refunds.csv`}
+                    searchPlaceholder="Search refunds…"
+                    height={tableHeight}
+                  />
+                ) : refundCount === 0 ? (
+                  <p className="text-text-secondary text-sm panel p-4">
+                    No DP refunds for this partner.
+                  </p>
+                ) : (
+                  <p className="text-text-secondary text-sm panel p-4">
+                    {formatNumber(refundCount)} DP refund(s) matched to block-paid leads. Open the
+                    ops dashboard for searchable case detail.
+                  </p>
+                )
+              ) : (
+                <p className="text-text-secondary text-sm panel p-4">
+                  Sync or upload refund sheet on Refunds tab to track DP refunds.
                 </p>
               )}
 
@@ -544,7 +695,7 @@ function PartnerPageInner() {
                     columns={blockAmountColumns}
                     exportFilename={`${partnerName.replace(/\s+/g, '_')}_block_amount_paid.csv`}
                     searchPlaceholder="Search within block amount paid leads..."
-                    height={360}
+                    height={tableHeight}
                   />
                 </>
               )}
@@ -555,3 +706,5 @@ function PartnerPageInner() {
     </div>
   );
 }
+
+export default PartnerPage;

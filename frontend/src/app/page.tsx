@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useFetch, useDebouncedValue } from '@/hooks/use-fetch';
+import { useChartHeight } from '@/hooks/use-chart-height';
 import { useAppStore, useEffectiveFilters } from '@/store/app-store';
 import { MetricStrip } from '@/components/dashboard/metric-strip';
 import { AlertsPanel } from '@/components/dashboard/alerts-panel';
@@ -14,6 +15,7 @@ import { PageHeader, SectionHeader } from '@/components/dashboard/section-header
 import { DataTable, useLeadColumns } from '@/components/tables/data-table';
 import { EMPTY_EXECUTIVE_CHARTS, EMPTY_KPIS } from '@/lib/empty-defaults';
 import { FUNNEL_STAGE_LEAD_FILTERS } from '@/lib/funnel-filters';
+import { dpRefundInsightItems } from '@/lib/dp-refund-insights';
 import { useDatasetStats } from '@/hooks/use-dataset-stats';
 import { useLeadExplorerStore } from '@/store/lead-explorer-store';
 import { isLeadershipMode } from '@/lib/static-mode';
@@ -54,12 +56,15 @@ function buildBlockAmountPoints(chart: ChartData | undefined): string[] {
   const totals = (chart.extra?.block_amount_total as number[] | undefined) ?? [];
   const blockSeries = chart.series.find((s) => s.name === 'Block Amount')?.data ?? [];
   const clashSeries = chart.series.find((s) => s.name === 'Counsellor Clashes')?.data ?? [];
+  const refundSeries = chart.series.find((s) => s.name === 'DP Refunds')?.data ?? [];
   const rows = chart.categories
     .map((partner, i) => ({
       partner: String(partner),
       block: Number(
         totals[i] ??
-          (Number(blockSeries[i] || 0) + Number(clashSeries[i] || 0))
+          (Number(blockSeries[i] || 0) +
+            Number(clashSeries[i] || 0) +
+            Number(refundSeries[i] || 0))
       ),
     }))
     .filter((r) => r.partner)
@@ -99,7 +104,8 @@ function buildBlockAmountPoints(chart: ChartData | undefined): string[] {
 function overviewInsights(
   kpis: KpiMetric[],
   funnel: ChartData | undefined,
-  partners: ChartData | undefined
+  partners: ChartData | undefined,
+  campus?: import('@/types').CampusBifurcation | null
 ): { text: string }[] {
   const items: { text: string }[] = [];
   const byKey = new Map(kpis.map((k) => [k.key, k]));
@@ -131,6 +137,8 @@ function overviewInsights(
     });
   }
 
+  items.push(...dpRefundInsightItems(campus, partners));
+
   if (partners?.categories?.length && partners.series[0]?.data?.length) {
     const leadData = partners.series[0].data.map((v) => Number(v) || 0);
     const maxI = leadData.indexOf(Math.max(...leadData));
@@ -142,7 +150,7 @@ function overviewInsights(
     }
   }
 
-  return items.slice(0, 5);
+  return items.slice(0, 6);
 }
 
 const METRIC_GROUPS = [
@@ -179,6 +187,8 @@ export default function ExecutivePage() {
   const setDrillDown = useAppStore((s) => s.setDrillDown);
   const openExplorer = useLeadExplorerStore((s) => s.openExplorer);
   const leadership = isLeadershipMode();
+  const performanceChartHeight = useChartHeight(300, 240);
+  const funnelChartHeight = useChartHeight(380, 300);
   const [trend, setTrend] = useState<(typeof TREND_OPTIONS)[number]['key']>('monthly_leads');
   const [metricTrend, setMetricTrend] =
     useState<(typeof METRIC_TREND_OPTIONS)[number]['key']>('leads_trend');
@@ -225,6 +235,11 @@ export default function ExecutivePage() {
     deps: [JSON.stringify(filters)],
   });
 
+  const { data: campusBifurcation } = useFetch({
+    fetcher: () => api.getCampusBifurcation(filters),
+    deps: [JSON.stringify(filters)],
+  });
+
   const columns = useLeadColumns();
   const displayKpis = kpis ?? EMPTY_KPIS;
   const displayCharts = { ...EMPTY_EXECUTIVE_CHARTS, ...(charts ?? {}) };
@@ -238,9 +253,10 @@ export default function ExecutivePage() {
       overviewInsights(
         displayKpis,
         displayCharts.funnel,
-        displayCharts.partner_comparison
+        displayCharts.partner_comparison,
+        campusBifurcation
       ),
-    [displayKpis, displayCharts.funnel, displayCharts.partner_comparison]
+    [displayKpis, displayCharts.funnel, displayCharts.partner_comparison, campusBifurcation]
   );
   const isRefreshing = (kpisFetching || chartsFetching) && Boolean(kpis || charts);
 
@@ -347,13 +363,13 @@ export default function ExecutivePage() {
           </div>
         }
       />
-      <ChartPanel chart={displayCharts[trend]} height={300} />
+      <ChartPanel chart={displayCharts[trend]} height={performanceChartHeight} />
 
       <div className="grid grid-cols-12 gap-3">
         <div className="col-span-12 lg:col-span-5">
           <ChartPanel
             chart={displayCharts.funnel}
-            height={340}
+            height={funnelChartHeight}
             onCategoryClick={
               leadership
                 ? undefined
@@ -364,7 +380,7 @@ export default function ExecutivePage() {
         <div className="col-span-12 lg:col-span-7">
           <ChartPanel
             chart={displayCharts.partner_comparison}
-            height={340}
+            height={funnelChartHeight}
             onCategoryClick={(partner) => {
               if (leadership) {
                 router.push(`/partner?partner=${encodeURIComponent(partner)}`);

@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation';
 import { X, Upload } from 'lucide-react';
 import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { cn } from '@/lib/utils';
-import { NAV_GROUPS, NAV_ICONS, NAV_PAGES } from '@/lib/nav';
+import { MOBILE_INSIGHT_LINKS, NAV_GROUPS, NAV_ICONS, NAV_PAGES } from '@/lib/nav';
 import { useAppStore } from '@/store/app-store';
 import { useMobileNavStore } from '@/store/mobile-nav-store';
 import { useUploadStore } from '@/store/upload-store';
@@ -77,6 +77,35 @@ export function MobileNavDrawer() {
         </div>
 
         <nav className="flex-1 overflow-y-auto py-2">
+          <div className="mb-3 px-4">
+            <div className="text-[10px] uppercase tracking-widest text-text-secondary mb-2">
+              Block & refunds
+            </div>
+            <div className="grid grid-cols-1 gap-1">
+              {MOBILE_INSIGHT_LINKS.map((link) => {
+                const Icon = NAV_ICONS[link.id] || NAV_ICONS.executive;
+                const active =
+                  pathname === link.href || pathname.startsWith(`${link.href}/`);
+                return (
+                  <Link
+                    key={link.id}
+                    href={link.href}
+                    onClick={closeDrawer}
+                    className={cn(
+                      'flex items-center gap-3 px-3 py-2.5 text-sm rounded-md min-h-[44px]',
+                      active
+                        ? 'bg-panel text-text border border-border'
+                        : 'text-text-secondary active:bg-panel/50'
+                    )}
+                  >
+                    <Icon className="w-5 h-5 shrink-0" />
+                    <span className="leading-snug">{link.label}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+
           {NAV_GROUPS.map((group) => {
             const pages = NAV_PAGES.filter((p) => p.group === group);
             if (!pages.length) return null;

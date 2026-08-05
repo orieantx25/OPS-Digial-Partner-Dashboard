@@ -35,6 +35,7 @@ from app.infrastructure.duckdb_repo import AnalyticsCache, DuckDBRepository  # n
 from app.services.analytics_service import AnalyticsEngine  # noqa: E402
 from app.services.block_payment_service import BlockPaymentService  # noqa: E402
 from app.services.persona_activity_service import PersonaActivityService  # noqa: E402
+from app.services.refund_service import RefundService  # noqa: E402
 
 OUT_DIR = REPO_ROOT / "frontend" / "public" / "data" / "snapshots"
 
@@ -113,6 +114,12 @@ def _strip_partner_detail(detail: Dict[str, Any]) -> Dict[str, Any]:
             **clashes,
             "rows": [],
         }
+    dp_refunds = out.get("block_dp_refunds")
+    if isinstance(dp_refunds, dict):
+        out["block_dp_refunds"] = {
+            **dp_refunds,
+            "rows": [],
+        }
     return out
 
 
@@ -167,6 +174,7 @@ def publish() -> Path:
     engine = AnalyticsEngine(duck_repo=duck, cache=cache)
     block_svc = BlockPaymentService(duck_repo=duck)
     persona_svc = PersonaActivityService(duck_repo=duck)
+    refund_svc = RefundService(duck_repo=duck)
 
     scopes = _resolve_scopes()
     published_at = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -178,6 +186,7 @@ def publish() -> Path:
     _write_json(OUT_DIR / "stats.json", engine.get_dataset_stats())
     _write_json(OUT_DIR / "filters.json", engine.get_filter_options())
     _write_json(OUT_DIR / "block_payment_status.json", block_svc.get_status())
+    _write_json(OUT_DIR / "refund_status.json", refund_svc.get_status())
     _write_json(OUT_DIR / "persona_activity_status.json", persona_svc.get_status())
 
     for scope_id, scope in scopes.items():
@@ -206,6 +215,7 @@ def publish() -> Path:
             ("revenue", engine.get_revenue_dashboard(filters)),
             ("predictive", engine.get_predictive_analytics(filters)),
             ("campus_bifurcation", engine.get_campus_bifurcation(filters)),
+            ("refund_cases", engine.get_refund_cases(filters, page=1, page_size=500)),
             ("block_payment_backtracking", engine.get_block_payment_backtracking(filters)),
             ("block_payment_attribution", engine.get_block_payment_attribution(filters)),
             ("alerts", engine.get_alerts(filters)),
@@ -218,6 +228,10 @@ def publish() -> Path:
             (
                 "partner_counsellor_clashes",
                 _strip_clashes_list(engine.get_partner_counsellor_clashes(filters)),
+            ),
+            (
+                "partner_dp_refunds",
+                _strip_clashes_list(engine.get_partner_dp_refunds(filters)),
             ),
         ]
 
@@ -248,6 +262,7 @@ def publish() -> Path:
             "stats.json",
             "filters.json",
             "block_payment_status.json",
+            "refund_status.json",
             "persona_activity_status.json",
         ],
     }

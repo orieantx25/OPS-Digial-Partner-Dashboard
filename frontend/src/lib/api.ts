@@ -10,7 +10,10 @@ import {
   LeadRecord,
   PaginatedResponse,
   PartnerCounsellorClashes,
+  PartnerDpRefunds,
   PersonaAnalytics,
+  RefundCaseRow,
+  RefundSheetStatus,
   StateSummary,
   UploadJob,
 } from '@/types';
@@ -104,6 +107,11 @@ const liveApi = {
       `/analytics/partner/counsellor-clashes${buildQuery(filtersToQuery(filters))}`
     ),
 
+  getPartnerDpRefunds: (filters: FilterParams) =>
+    request<PartnerDpRefunds>(
+      `/analytics/partner/dp-refunds${buildQuery(filtersToQuery(filters))}`
+    ),
+
   getContactability: (filters: FilterParams) =>
     request<Record<string, ChartData>>(
       `/analytics/contactability${buildQuery(filtersToQuery(filters))}`
@@ -154,6 +162,25 @@ const liveApi = {
     request<CampusBifurcation>(
       `/analytics/campus-bifurcation${buildQuery(filtersToQuery(filters))}`
     ),
+
+  getRefundCases: (filters: FilterParams, page = 1, pageSize = 50) =>
+    request<PaginatedResponse<RefundCaseRow>>(
+      `/refunds/cases${buildQuery({ ...filtersToQuery(filters), page, page_size: pageSize })}`
+    ),
+
+  getRefundStatus: () => request<RefundSheetStatus>('/refunds/status'),
+
+  uploadRefundSheet: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<{
+      status: string;
+      row_count: number;
+      source_filename: string;
+      uploaded_at: string;
+      message: string;
+    }>('/refunds/upload', { method: 'POST', body: form });
+  },
 
   getBlockPaymentBacktracking: (filters: FilterParams) =>
     request<BlockPaymentBacktracking>(

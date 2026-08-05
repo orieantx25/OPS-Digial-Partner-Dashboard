@@ -25,6 +25,10 @@ from app.domain.schema import (
     PERSONA_ACTIVITY_META_FILE,
     PERSONA_ACTIVITY_PARQUET_FILE,
     PERSONA_ACTIVITY_TABLE,
+    REFUND_COLUMNS,
+    REFUND_META_FILE,
+    REFUND_PARQUET_FILE,
+    REFUND_TABLE,
 )
 from app.logging_config import get_logger
 
@@ -44,9 +48,11 @@ class DuckDBRepository:
         self.block_payment_meta_path = self.settings.parquet_dir / BLOCK_PAYMENT_META_FILE
         self.persona_activity_path = self.settings.parquet_dir / PERSONA_ACTIVITY_PARQUET_FILE
         self.persona_activity_meta_path = self.settings.parquet_dir / PERSONA_ACTIVITY_META_FILE
+        self.refund_path = self.settings.parquet_dir / REFUND_PARQUET_FILE
+        self.refund_meta_path = self.settings.parquet_dir / REFUND_META_FILE
         self.duckdb_path = self.settings.duckdb_path
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
-        self._view_stamp: Optional[Tuple[float, float, float]] = None
+        self._view_stamp: Optional[Tuple[float, float, float, float]] = None
         self._row_count_cache: Optional[int] = None
         self._columns_cache: Optional[List[str]] = None
 
@@ -66,11 +72,12 @@ class DuckDBRepository:
         except OSError:
             return 0.0
 
-    def _current_view_stamp(self) -> Tuple[float, float, float]:
+    def _current_view_stamp(self) -> Tuple[float, float, float, float]:
         return (
             self._file_mtime(self.parquet_path),
             self._file_mtime(self.block_payment_path),
             self._file_mtime(self.persona_activity_path),
+            self._file_mtime(self.refund_path),
         )
 
     def _get_conn(self) -> duckdb.DuckDBPyConnection:
@@ -81,6 +88,7 @@ class DuckDBRepository:
             self.register_master_view(self._conn)
             self.register_block_payment_view(self._conn)
             self.register_persona_activity_view(self._conn)
+            self.register_refund_view(self._conn)
             self._view_stamp = stamp
             self._row_count_cache = None
             self._columns_cache = None
@@ -99,6 +107,9 @@ class DuckDBRepository:
 
     def persona_activity_exists(self) -> bool:
         return self.persona_activity_path.exists()
+
+    def refund_exists(self) -> bool:
+        return self.refund_path.exists()
 
     def _unlink_block_payment_files(self) -> None:
         if self.block_payment_path.exists():
@@ -187,6 +198,15 @@ class DuckDBRepository:
         parts = [f"CAST(NULL AS VARCHAR) AS {col}" for col in PERSONA_ACTIVITY_COLUMNS]
         return f"SELECT {', '.join(parts)} WHERE 1=0"
 
+    def _empty_refund_select_sql(self) -> str:
+        parts: List[str] = []
+        for col in REFUND_COLUMNS:
+            if col == "is_refund":
+                parts.append(f"CAST(NULL AS BOOLEAN) AS {col}")
+            else:
+                parts.append(f"CAST(NULL AS VARCHAR) AS {col}")
+        return f"SELECT {', '.join(parts)} WHERE 1=0"
+
     def register_block_payment_view(self, conn: duckdb.DuckDBPyConnection) -> None:
         if self.block_payment_exists():
             conn.execute(
@@ -209,6 +229,18 @@ class DuckDBRepository:
             conn.execute(
                 f"CREATE OR REPLACE VIEW {PERSONA_ACTIVITY_TABLE} AS "
                 f"{self._empty_persona_activity_select_sql()}"
+            )
+
+    def register_refund_view(self, conn: duckdb.DuckDBPyConnection) -> None:
+        if self.refund_exists():
+            conn.execute(
+                f"CREATE OR REPLACE VIEW {REFUND_TABLE} AS "
+                f"SELECT * FROM read_parquet('{self._escape_path(self.refund_path)}')"
+            )
+        else:
+            conn.execute(
+                f"CREATE OR REPLACE VIEW {REFUND_TABLE} AS "
+                f"{self._empty_refund_select_sql()}"
             )
 
     def register_master_view(self, conn: duckdb.DuckDBPyConnection) -> None:

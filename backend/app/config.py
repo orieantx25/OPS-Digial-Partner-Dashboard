@@ -1,6 +1,7 @@
 """Application configuration loaded from environment variables."""
 
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import List
 
@@ -31,6 +32,12 @@ class Settings(BaseSettings):
     leadsquared_page_size: int = 1000
     leadsquared_sync_workers: int = 3
     sync_admin_token: str = ""
+
+    google_refund_spreadsheet_id: str = ""
+    google_refund_sheet_name: str = ""
+    google_refund_sheet_gid: str = "0"
+    google_refund_public_csv_url: str = ""
+    google_service_account_json: str = ""
 
     data_dir: Path = Path("./data")
     parquet_dir: Path = Path("./data/parquet")
@@ -64,6 +71,45 @@ class Settings(BaseSettings):
             and self.leadsquared_access_key.strip()
             and self.leadsquared_secret_key.strip()
         )
+
+    @property
+    def google_refund_public_csv_url_resolved(self) -> str:
+        explicit = self.google_refund_public_csv_url.strip()
+        if explicit:
+            return explicit
+        sheet_id = self.google_refund_spreadsheet_id.strip()
+        if not sheet_id:
+            return ""
+        gid = self.google_refund_sheet_gid.strip() or "0"
+        return (
+            f"https://docs.google.com/spreadsheets/d/{sheet_id}/export"
+            f"?format=csv&gid={gid}"
+        )
+
+    @property
+    def google_refund_public_csv_configured(self) -> bool:
+        return bool(self.google_refund_public_csv_url_resolved)
+
+    @property
+    def google_sheets_service_account_configured(self) -> bool:
+        path = self.google_service_account_json.strip()
+        if path and Path(path).exists():
+            return True
+        creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        return bool(creds and Path(creds).exists())
+
+    @property
+    def google_sheets_configured(self) -> bool:
+        return self.google_refund_public_csv_configured or (
+            self.google_refund_spreadsheet_id.strip()
+            and self.google_sheets_service_account_configured
+        )
+
+    @property
+    def google_sheets_api_configured(self) -> bool:
+        if not self.google_refund_spreadsheet_id.strip():
+            return False
+        return self.google_sheets_service_account_configured
 
     @property
     def cors_origin_list(self) -> List[str]:

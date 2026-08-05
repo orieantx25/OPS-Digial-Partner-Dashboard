@@ -300,7 +300,70 @@ BLOCK_PAYMENT_COLUMNS: List[str] = [
     "source_filename",
 ]
 
+# Refund cases sheet (Google Sheets sync or manual upload).
+REFUND_TABLE = "refund_tracking"
+REFUND_PARQUET_FILE = "refund_tracking.parquet"
+REFUND_META_FILE = "refund_meta.json"
+
+REFUND_COLUMN_ALIASES: Dict[str, str] = {
+    "s no.": "serial_no",
+    "s no": "serial_no",
+    "sno": "serial_no",
+    "utr": "utr",
+    "status as per finance": "status_finance",
+    "finance remarks": "finance_remarks",
+    "final status": "final_status",
+    "university": "university",
+    "student name": "student_name",
+    "campus": "campus",
+    "mentor": "mentor",
+    "mail id": "email",
+    "mail id.": "email",
+    "provisional id": "provisional_id",
+    "phone number": "phone",
+    "remarks": "remarks",
+    "remarks by sst": "remarks_sst",
+    "admission team remarks": "admission_team_remarks",
+    "remarks(11-jul)": "remarks_11_jul",
+    "remarks(13-jul)": "remarks_13_jul",
+    "remarks(16-jul)": "remarks_16_jul",
+    "calling reamrks(21-jul)": "calling_remarks_21_jul",
+    "calling remarks(21-jul)": "calling_remarks_21_jul",
+    "mail link": "mail_link",
+    "mail link.": "mail_link",
+}
+
+REFUND_COLUMNS: List[str] = [
+    "serial_no",
+    "utr",
+    "status_finance",
+    "finance_remarks",
+    "final_status",
+    "university",
+    "student_name",
+    "campus",
+    "mentor",
+    "email",
+    "provisional_id",
+    "phone",
+    "remarks",
+    "remarks_sst",
+    "admission_team_remarks",
+    "remarks_11_jul",
+    "remarks_13_jul",
+    "remarks_16_jul",
+    "calling_remarks_21_jul",
+    "mail_link",
+    "match_email",
+    "match_phone",
+    "match_provisional_id",
+    "is_refund",
+    "uploaded_at",
+    "source_filename",
+]
+
 BOOLEAN_COLUMNS: Set[str] = {
+    "is_refund",
     "connected",
     "mql",
     "sql",

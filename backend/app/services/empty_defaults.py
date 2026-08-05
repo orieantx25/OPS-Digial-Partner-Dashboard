@@ -88,6 +88,7 @@ def empty_revenue() -> Dict[str, Any]:
             "admissions": 0,
             "block_amount_paid": 0,
             "counsellor_clashes": 0,
+            "dp_refunds": 0,
             "block_amount_roi": 0,
             "advance_total": 0,
             "incentive_total": 0,
@@ -98,6 +99,7 @@ def empty_revenue() -> Dict[str, Any]:
             "breakeven_partners": 0,
             "partners_below_breakeven": 0,
             "has_clash_sheet": False,
+            "has_refund_sheet": False,
         },
     }
 
@@ -228,7 +230,63 @@ def empty_campus_bifurcation() -> Dict[str, Any]:
             "categories": [],
             "series": [],
         },
+        "refund_summary": {
+            "total_cases": 0,
+            "refund_cases": 0,
+            "refund_processed": 0,
+            "digital_partner_refund_cases": 0,
+            "by_campus": {"SSAHE": 0, "ADYPU": 0},
+            "refunds_applied_by_campus": {"SSAHE": 0, "ADYPU": 0},
+            "dp_refund_requests": {
+                "total": 0,
+                "by_campus": {"SSAHE": 0, "ADYPU": 0},
+                "refunded_by_campus": {"SSAHE": 0, "ADYPU": 0},
+            },
+        },
+        "sheet_unassigned_count": 0,
+        "adjusted_sheet_total": 0,
+        "adjusted_sheet_by_campus": [],
+        "adjusted_sheet_by_gender": [],
+        "adjusted_sheet_campus_chart": {
+            "chart_id": "adjusted_sheet_campus_block_paid",
+            "chart_type": "bar",
+            "title": "Active block received by campus",
+            "categories": [],
+            "series": [],
+        },
+        "adjusted_sheet_gender_chart": {
+            "chart_id": "adjusted_sheet_gender_block_paid",
+            "chart_type": "donut",
+            "title": "Active block received by gender",
+            "categories": [],
+            "series": [],
+            "extra": {
+                "center_total": 0,
+                "center_label": "Active total",
+                "compact_donut": True,
+                "show_slice_labels": True,
+            },
+        },
+        "adjusted_sheet_campus_gender_charts": [],
+        "dp_refund_by_campus_chart": {
+            "chart_id": "dp_refund_by_campus",
+            "chart_type": "bar",
+            "title": "Digital partner refunds by campus",
+            "categories": [],
+            "series": [],
+        },
+        "overall_refund_by_campus_chart": {
+            "chart_id": "overall_refund_by_campus",
+            "chart_type": "bar",
+            "title": "Refund cases by campus",
+            "categories": [],
+            "series": [],
+        },
     }
+
+
+def empty_refund_cases() -> PaginatedResponse:
+    return PaginatedResponse(items=[], total=0, page=1, page_size=50, total_pages=1)
 
 
 def empty_search() -> PaginatedResponse:

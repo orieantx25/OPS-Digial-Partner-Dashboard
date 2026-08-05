@@ -189,6 +189,7 @@ export const DASHBOARD_PAGES = [
   { id: 'campaign', label: 'Campaign', href: '/campaign', group: 'Ops' },
   { id: 'geographic', label: 'Geographic', href: '/geographic', group: 'Ops' },
   { id: 'block-payment', label: 'Block Payment', href: '/block-payment', group: 'Ops' },
+  { id: 'refund', label: 'Refunds', href: '/refund', group: 'Ops' },
   { id: 'campus', label: 'Campus', href: '/campus', group: 'Ops' },
   { id: 'revenue', label: 'ROI', href: '/revenue', group: 'Forecast' },
   { id: 'predictive', label: 'Predictive', href: '/predictive', group: 'Forecast' },
@@ -215,6 +216,25 @@ export interface PartnerCounsellorClashes {
   total_clashes: number;
   by_partner: { partner: string; count: number }[];
   rows: PartnerCounsellorClash[];
+}
+
+export interface PartnerDpRefundRow {
+  prospect_id?: string;
+  partner?: string;
+  name?: string;
+  email?: string;
+  phone?: string;
+  final_status?: string;
+  campus?: string;
+  university?: string;
+  utr?: string;
+}
+
+export interface PartnerDpRefunds {
+  has_sheet: boolean;
+  total_refunds: number;
+  by_partner: { partner: string; count: number }[];
+  rows: PartnerDpRefundRow[];
 }
 
 export interface PersonaSummary {
@@ -368,4 +388,68 @@ export interface CampusBifurcation {
   partner_share_by_campus?: PartnerShareByCampusRow[];
   partner_gender_chart?: ChartData;
   partner_campus_chart?: ChartData;
+  refund_summary?: RefundSummary;
+  sheet_unassigned_count?: number;
+  adjusted_sheet_total?: number;
+  adjusted_sheet_by_campus?: CampusBifurcationRow[];
+  adjusted_sheet_by_gender?: CampusGenderRow[];
+  adjusted_sheet_campus_chart?: ChartData;
+  adjusted_sheet_gender_chart?: ChartData;
+  adjusted_sheet_campus_gender_charts?: CampusGenderChart[];
+  dp_refund_by_campus_chart?: ChartData;
+  overall_refund_by_campus_chart?: ChartData;
+}
+
+export interface DpRefundRequestsSummary {
+  total: number;
+  by_campus?: { SSAHE?: number; ADYPU?: number };
+  refunded_by_campus?: { SSAHE?: number; ADYPU?: number };
+}
+
+export interface RefundSummary {
+  total_cases: number;
+  refund_cases: number;
+  refund_processed?: number;
+  digital_partner_refund_cases: number;
+  by_campus?: { SSAHE?: number; ADYPU?: number };
+  refunds_applied_by_campus?: { SSAHE?: number; ADYPU?: number };
+  dp_refund_requests?: DpRefundRequestsSummary;
+}
+
+export interface RefundCaseRow {
+  serial_no?: string | null;
+  utr?: string | null;
+  status_finance?: string | null;
+  finance_remarks?: string | null;
+  final_status?: string | null;
+  university?: string | null;
+  student_name?: string | null;
+  campus?: string | null;
+  mentor?: string | null;
+  email?: string | null;
+  provisional_id?: string | null;
+  phone?: string | null;
+  remarks?: string | null;
+  remarks_sst?: string | null;
+  admission_team_remarks?: string | null;
+  remarks_11_jul?: string | null;
+  remarks_13_jul?: string | null;
+  remarks_16_jul?: string | null;
+  calling_remarks_21_jul?: string | null;
+  mail_link?: string | null;
+  is_refund: boolean;
+  matched_to_block_payment: boolean;
+  is_digital_partner_block_paid: boolean;
+  matched_campus_code?: string | null;
+}
+
+export interface RefundSheetStatus {
+  has_data: boolean;
+  row_count: number;
+  refund_count: number;
+  source_filename?: string | null;
+  uploaded_at?: string | null;
+  google_configured: boolean;
+  public_csv_configured?: boolean;
+  service_account_configured?: boolean;
 }

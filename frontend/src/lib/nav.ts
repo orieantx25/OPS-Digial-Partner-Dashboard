@@ -11,6 +11,7 @@ import {
   TrendingUp,
   Building2,
   Receipt,
+  Undo2,
   type LucideIcon,
 } from 'lucide-react';
 import { DASHBOARD_PAGES, NAV_GROUPS } from '@/types';
@@ -27,6 +28,7 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   revenue: IndianRupee,
   predictive: TrendingUp,
   'block-payment': Receipt,
+  refund: Undo2,
   campus: Building2,
 };
 
@@ -47,4 +49,11 @@ export const MOBILE_BOTTOM_TABS = [
   { id: 'executive', href: '/', label: 'Overview' },
   { id: 'funnel', href: '/funnel', label: 'Funnel' },
   { id: 'partner', href: '/partner', label: 'Partners' },
+] as const;
+
+/** Quick links for block payment, refunds, and ROI (mobile drawer). */
+export const MOBILE_INSIGHT_LINKS = [
+  { id: 'campus', href: '/campus', label: 'Campus & block KPIs' },
+  { id: 'refund', href: '/refund', label: 'Refund cases & KPIs' },
+  { id: 'revenue', href: '/revenue', label: 'ROI (DP refunds)' },
 ] as const;

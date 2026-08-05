@@ -68,6 +68,14 @@ async def partner_counsellor_clashes(
     return engine.get_partner_counsellor_clashes(filters)
 
 
+@router.get("/partner/dp-refunds")
+async def partner_dp_refunds(
+    filters: FilterParams = Depends(parse_filters),
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    return engine.get_partner_dp_refunds(filters)
+
+
 @router.get("/contactability")
 async def contactability(
     filters: FilterParams = Depends(parse_filters),

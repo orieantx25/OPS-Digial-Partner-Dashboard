@@ -62,6 +62,9 @@ export const staticApi = {
   getPartnerCounsellorClashes: (filters: FilterParams) =>
     scoped(filters, 'partner_counsellor_clashes.json'),
 
+  getPartnerDpRefunds: (filters: FilterParams) =>
+    scoped(filters, 'partner_dp_refunds.json'),
+
   getContactability: (filters: FilterParams) => scoped(filters, 'contactability.json'),
 
   getAiCalling: (filters: FilterParams) => scoped(filters, 'ai_calling.json'),
@@ -82,6 +85,11 @@ export const staticApi = {
 
   getCampusBifurcation: (filters: FilterParams) =>
     scoped(filters, 'campus_bifurcation.json'),
+
+  getRefundCases: (filters: FilterParams, page = 1, pageSize = 50) =>
+    scoped(filters, 'refund_cases.json'),
+
+  getRefundStatus: () => fetchSnapshotJson('refund_status.json'),
 
   getBlockPaymentBacktracking: (filters: FilterParams) =>
     scoped(filters, 'block_payment_backtracking.json'),
@@ -150,6 +158,10 @@ export const staticApi = {
   },
 
   uploadBlockPaymentSheet: async () => {
+    throw new Error('Upload is not available on the leadership dashboard');
+  },
+
+  uploadRefundSheet: async () => {
     throw new Error('Upload is not available on the leadership dashboard');
   },
 

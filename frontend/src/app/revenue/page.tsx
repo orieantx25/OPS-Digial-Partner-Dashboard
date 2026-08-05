@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { ColumnDef } from '@tanstack/react-table';
 import { api } from '@/lib/api';
 import { useFetch } from '@/hooks/use-fetch';
+import { useChartHeight } from '@/hooks/use-chart-height';
 import { useAppStore, useEffectiveFilters } from '@/store/app-store';
 import { DataTable } from '@/components/tables/data-table';
 import { InsightStrip } from '@/components/dashboard/insight-strip';
@@ -25,6 +26,7 @@ interface PartnerRoiRow {
   advance_only?: boolean;
   block_amount_paid?: number;
   counsellor_clashes?: number;
+  dp_refunds?: number;
   block_amount_roi?: number;
   incentive_total?: number | null;
   cost?: number | null;
@@ -39,11 +41,13 @@ interface PartnerRoiRow {
 interface RoiTotals {
   block_amount_paid: number;
   counsellor_clashes: number;
+  dp_refunds?: number;
   block_amount_roi: number;
   incentive_total: number;
   breakeven_partners: number;
   partners_below_breakeven: number;
   has_clash_sheet?: boolean;
+  has_refund_sheet?: boolean;
 }
 
 function statusClass(status?: string): string {
@@ -54,6 +58,9 @@ function statusClass(status?: string): string {
 
 export default function RoiPage() {
   const filters = useEffectiveFilters();
+  const chartHeight = useChartHeight(260, 220);
+  const tableHeight = useChartHeight(420, 320);
+  const goalsTableHeight = useChartHeight(240, 200);
   const setDrillDown = useAppStore((s) => s.setDrillDown);
 
   const { data, loading, isFetching } = useFetch({
@@ -94,6 +101,12 @@ export default function RoiPage() {
     if (clashes > 0) {
       items.push({
         text: `${formatNumber(clashes)} counsellor clash(es) excluded from Block ROI.`,
+      });
+    }
+    const dpRefunds = Number(totals?.dp_refunds || 0);
+    if (dpRefunds > 0) {
+      items.push({
+        text: `${formatNumber(dpRefunds)} digital partner refund(s) excluded from Block ROI.`,
       });
     }
     const behind = goals?.totals?.behind ?? 0;
@@ -178,6 +191,19 @@ export default function RoiPage() {
         accessorKey: 'counsellor_clashes',
         header: 'Counsellor Clashes',
         meta: { minWidth: 130 },
+        cell: ({ getValue }) => {
+          const n = Number(getValue() || 0);
+          return (
+            <span className={cn(n > 0 && 'text-amber-300 font-medium')}>
+              {formatNumber(n)}
+            </span>
+          );
+        },
+      },
+      {
+        accessorKey: 'dp_refunds',
+        header: 'DP Refunds',
+        meta: { minWidth: 110 },
         cell: ({ getValue }) => {
           const n = Number(getValue() || 0);
           return (
@@ -291,17 +317,17 @@ export default function RoiPage() {
 
       <SectionHeader
         title="Partner ROI Overview"
-        subtitle="Cost = Advance + (Incentive × Block ROI) · Revenue = ₹5.5L × Block ROI · Break even when Revenue ≥ Cost · College Wollege is advance-only"
+        subtitle="Block ROI = Block paid − counsellor clashes − DP refunds · Cost = Advance + (Incentive × Block ROI) · Revenue = ₹5.5L × Block ROI"
       />
 
       {!totals?.has_clash_sheet && (
         <p className="text-xs text-amber-400 panel p-3">
           Upload the block amount paid sheet on Block Payment to exclude counsellor
-          clashes from ROI. Until then, all block paid counts are used as the admission proxy.
+          clashes from ROI. Sync refund sheet on Sync LSQ to exclude DP refunds.
         </p>
       )}
 
-      <div className="panel grid grid-cols-2 md:grid-cols-3 gap-px bg-border">
+      <div className="panel grid grid-cols-2 md:grid-cols-4 gap-px bg-border">
         {[
           {
             label: 'Block (ROI)',
@@ -312,6 +338,11 @@ export default function RoiPage() {
             label: 'Counsellor Clashes',
             value: formatNumber(Number(totals?.counsellor_clashes || 0)),
             warn: Number(totals?.counsellor_clashes || 0) > 0,
+          },
+          {
+            label: 'DP Refunds',
+            value: formatNumber(Number(totals?.dp_refunds || 0)),
+            warn: Number(totals?.dp_refunds || 0) > 0,
           },
           {
             label: 'Below Break Even',
@@ -344,10 +375,10 @@ export default function RoiPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <ChartPanel chart={statusChart} height={260} />
+        <ChartPanel chart={statusChart} height={chartHeight} />
         <ChartPanel
           chart={gapChart}
-          height={260}
+          height={chartHeight}
           onCategoryClick={(partner) => setDrillDown({ partner })}
         />
       </div>
@@ -360,7 +391,7 @@ export default function RoiPage() {
         data={(goals?.partners ?? []) as Record<string, unknown>[]}
         columns={goalColumns}
         exportFilename="roi_goals.csv"
-        height={240}
+        height={goalsTableHeight}
       />
 
       <SectionHeader title="Partner Breakeven & ROI" />
@@ -369,7 +400,7 @@ export default function RoiPage() {
         columns={columns as ColumnDef<Record<string, unknown>>[]}
         exportFilename="partner_roi.csv"
         searchPlaceholder="Search partners…"
-        height={420}
+        height={tableHeight}
       />
     </div>
   );

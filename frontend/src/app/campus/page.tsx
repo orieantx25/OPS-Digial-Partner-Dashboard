@@ -5,8 +5,10 @@ import dynamic from 'next/dynamic';
 import { ColumnDef } from '@tanstack/react-table';
 import { api } from '@/lib/api';
 import { useFetch } from '@/hooks/use-fetch';
+import { useChartHeight } from '@/hooks/use-chart-height';
 import { useEffectiveFilters } from '@/store/app-store';
 import { DataTable } from '@/components/tables/data-table';
+import { CampusKpiDashboard } from '@/components/dashboard/campus-kpi-dashboard';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { FetchingHint } from '@/components/dashboard/fetching-hint';
 import { ChartData } from '@/types';
@@ -19,56 +21,79 @@ const ChartPanel = dynamic(
 
 export default function CampusPage() {
   const filters = useEffectiveFilters();
+  const chartSm = useChartHeight(220, 200);
+  const chartMd = useChartHeight(240, 210);
+  const chartLg = useChartHeight(260, 220);
 
   const { data, loading, isFetching } = useFetch({
     fetcher: () => api.getCampusBifurcation(filters),
     deps: [JSON.stringify(filters)],
   });
 
-  const sheetByCampus = data?.sheet_by_campus ?? [];
-  const byCampus = data?.by_campus ?? [];
-  const topCampusDigital = byCampus[0];
-  const topCampusOverall = sheetByCampus[0];
-
-  const tableRows = useMemo(
-    () =>
-      sheetByCampus.map((row) => {
-        const male = row.by_gender.find((g) => g.gender.toLowerCase() === 'male')?.count ?? 0;
-        const female = row.by_gender.find((g) => g.gender.toLowerCase() === 'female')?.count ?? 0;
-        const other = row.block_paid - male - female;
-        return {
-          campus_code: row.campus_code,
-          campus_name: row.campus_name,
-          block_paid: row.block_paid,
-          male,
-          female,
-          other: other > 0 ? other : 0,
-        };
-      }),
-    [sheetByCampus]
-  );
-
-  const columns: ColumnDef<(typeof tableRows)[number]>[] = [
-    { accessorKey: 'campus_code', header: 'Campus Code', meta: { width: '12%' } },
-    { accessorKey: 'campus_name', header: 'Campus', meta: { width: '22%' } },
-    { accessorKey: 'block_paid', header: 'Block Paid', meta: { width: '12%' } },
-    { accessorKey: 'male', header: 'Male', meta: { width: '10%' } },
-    { accessorKey: 'female', header: 'Female', meta: { width: '10%' } },
-    { accessorKey: 'other', header: 'Other', meta: { width: '10%' } },
-  ];
-
-  const sheetCampusChart = data?.sheet_campus_chart as ChartData | undefined;
-  const sheetGenderChart = data?.sheet_gender_chart as ChartData | undefined;
-  const sheetCampusGenderCharts = data?.sheet_campus_gender_charts ?? [];
-  const campusChart = data?.campus_chart as ChartData | undefined;
+  const adjustedCampusChart = data?.adjusted_sheet_campus_chart as ChartData | undefined;
+  const adjustedGenderChart = data?.adjusted_sheet_gender_chart as ChartData | undefined;
+  const adjustedCampusGenderCharts = data?.adjusted_sheet_campus_gender_charts ?? [];
+  const overallRefundChart = data?.overall_refund_by_campus_chart as ChartData | undefined;
+  const dpRefundChart = data?.dp_refund_by_campus_chart as ChartData | undefined;
   const genderChart = data?.gender_chart as ChartData | undefined;
   const campusGenderCharts = data?.campus_gender_charts ?? [];
   const partnerGenderChart = data?.partner_gender_chart as ChartData | undefined;
   const partnerCampusChart = data?.partner_campus_chart as ChartData | undefined;
   const digitalPartnerShareChart = data?.digital_partner_share_chart as ChartData | undefined;
 
+  const refundSummary = data?.refund_summary;
+  const grossTotal = data?.sheet_total ?? 0;
+  const activeTotal = data?.adjusted_sheet_total ?? grossTotal;
+  const refundCases = refundSummary?.refund_cases ?? 0;
+
+  const campusTableRows = useMemo(() => {
+    const grossList = data?.sheet_by_campus ?? [];
+    const adjustedList = data?.adjusted_sheet_by_campus ?? [];
+    const grossMap = new Map(grossList.map((r) => [r.campus_code, r]));
+    const adjMap = new Map(adjustedList.map((r) => [r.campus_code, r]));
+    const codes = new Set([...grossMap.keys(), ...adjMap.keys()]);
+
+    return [...codes]
+      .map((code) => {
+        const adj = adjMap.get(code);
+        const gross = grossMap.get(code);
+        const row = adj ?? gross;
+        if (!row) return null;
+        const grossBlock = gross?.block_paid ?? row.block_paid;
+        const activeBlock = adj?.block_paid ?? grossBlock;
+        const male =
+          row.by_gender.find((g) => g.gender.toLowerCase() === 'male')?.count ?? 0;
+        const female =
+          row.by_gender.find((g) => g.gender.toLowerCase() === 'female')?.count ?? 0;
+        const other = activeBlock - male - female;
+        return {
+          campus_code: code,
+          campus_name: row.campus_name,
+          active_block: activeBlock,
+          gross_block: grossBlock,
+          refunded: Math.max(0, grossBlock - activeBlock),
+          male,
+          female,
+          other: other > 0 ? other : 0,
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+      .sort((a, b) => b.active_block - a.active_block);
+  }, [data?.adjusted_sheet_by_campus, data?.sheet_by_campus]);
+
+  const campusColumns: ColumnDef<(typeof campusTableRows)[number]>[] = [
+    { accessorKey: 'campus_code', header: 'Code', meta: { width: '10%' } },
+    { accessorKey: 'campus_name', header: 'Campus', meta: { width: '22%' } },
+    { accessorKey: 'active_block', header: 'Active block', meta: { width: '11%' } },
+    { accessorKey: 'gross_block', header: 'Gross block', meta: { width: '11%' } },
+    { accessorKey: 'refunded', header: 'Refunded', meta: { width: '10%' } },
+    { accessorKey: 'male', header: 'Male', meta: { width: '9%' } },
+    { accessorKey: 'female', header: 'Female', meta: { width: '9%' } },
+    { accessorKey: 'other', header: 'Other', meta: { width: '9%' } },
+  ];
+
   return (
-    <div className={cn('space-y-4', isFetching && data && 'opacity-90')}>
+    <div className={cn('space-y-6', isFetching && data && 'opacity-90')}>
       <PageHeader title="Campus Bifurcation" />
       {loading && !data ? (
         <p className="text-text-secondary text-sm">Loading...</p>
@@ -78,139 +103,104 @@ export default function CampusPage() {
 
       {!data?.has_sheet ? (
         <p className="text-text-secondary text-sm panel p-4">
-          Upload a block amount paid sheet on Block Payment to see campus and gender breakdown
-          for matched block-paid leads.
+          Upload a block amount paid sheet on Block Payment to see campus and gender breakdown.
         </p>
       ) : (
         <>
-          <div className="panel grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-px bg-border max-w-5xl">
-            <div className="bg-surface px-4 py-3">
-              <div className="text-[10px] uppercase tracking-widest text-text-secondary">
-                Block Paid (Digital Partners)
-              </div>
-              <div className="text-lg font-semibold text-text kpi-value mt-1">
-                {formatNumber(data.total_block_paid)}
-              </div>
-            </div>
-            <div className="bg-surface px-4 py-3">
-              <div className="text-[10px] uppercase tracking-widest text-text-secondary">
-                Sheet total
-              </div>
-              <div className="text-lg font-semibold text-text kpi-value mt-1">
-                {formatNumber(data.sheet_total ?? 0)}
-              </div>
-            </div>
-            <div className="bg-surface px-4 py-3">
-              <div className="text-[10px] uppercase tracking-widest text-text-secondary">
-                Digital partner share
-              </div>
-              <div className="text-lg font-semibold text-primary kpi-value mt-1">
-                {formatNumber(data.digital_partner_count ?? data.matched_count)}
-              </div>
-              <div className="text-[10px] text-text-secondary mt-0.5">
-                {formatNumber(data.digital_partner_share_pct ?? 0)}% of sheet
-              </div>
-            </div>
-            <div className="bg-surface px-4 py-3">
-              <div className="text-[10px] uppercase tracking-widest text-text-secondary">
-                Top Campus
-              </div>
-              <div className="text-sm font-semibold text-text mt-1 truncate">
-                {topCampusOverall?.campus_name ?? '—'}
-              </div>
-              <div className="text-[10px] text-text-secondary mt-0.5">
-                {topCampusOverall ? formatNumber(topCampusOverall.block_paid) : '—'}
-              </div>
-            </div>
-            <div className="bg-surface px-4 py-3">
-              <div className="text-[10px] uppercase tracking-widest text-text-secondary">
-                Top Campus (Digital Partners)
-              </div>
-              <div className="text-sm font-semibold text-text mt-1 truncate">
-                {topCampusDigital?.campus_name ?? '—'}
-              </div>
-              <div className="text-[10px] text-text-secondary mt-0.5">
-                {topCampusDigital ? formatNumber(topCampusDigital.block_paid) : '—'}
-              </div>
-            </div>
-          </div>
+          <CampusKpiDashboard data={data} />
 
-          <SectionHeader
-            title="Block amount received"
-            subtitle="All payment-sheet block amounts — full sheet, not limited to digital partners"
-          />
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
-            <div className="lg:col-span-4 max-w-md lg:max-w-none">
-              {digitalPartnerShareChart && (
-                <ChartPanel chart={digitalPartnerShareChart} height={240} />
-              )}
+          {/* Section A — Overall */}
+          <section className="space-y-3 panel p-3 sm:p-4">
+            <SectionHeader
+              title="Overall — all block received"
+              subtitle="Active counts after excluding matched refund cases"
+            />
+            <p className="text-xs text-text-secondary">
+              Total payment {formatNumber(grossTotal)} · Refunds {formatNumber(refundCases)} ·
+              Active {formatNumber(activeTotal)}
+            </p>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+              <div className="lg:col-span-4 max-w-md lg:max-w-none">
+                {digitalPartnerShareChart && (
+                  <ChartPanel chart={digitalPartnerShareChart} height={chartSm} />
+                )}
+              </div>
+              <div className="lg:col-span-5">
+                {adjustedCampusChart && (
+                  <ChartPanel chart={adjustedCampusChart} height={chartSm} />
+                )}
+              </div>
+              <div className="lg:col-span-3">
+                {adjustedGenderChart && (
+                  <ChartPanel chart={adjustedGenderChart} height={chartSm} />
+                )}
+              </div>
             </div>
-            <div className="lg:col-span-5">
-              {sheetCampusChart && <ChartPanel chart={sheetCampusChart} height={240} />}
-            </div>
-            <div className="lg:col-span-3">
-              {sheetGenderChart && <ChartPanel chart={sheetGenderChart} height={240} />}
-            </div>
-          </div>
+            {adjustedCampusGenderCharts.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {adjustedCampusGenderCharts.map((item) => (
+                  <ChartPanel
+                    key={`adj-${item.campus_code}`}
+                    chart={item.gender_chart}
+                    height={chartSm - 20}
+                  />
+                ))}
+              </div>
+            )}
+            {(overallRefundChart || dpRefundChart) && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 pt-2 border-t border-border">
+                {overallRefundChart && (
+                  <ChartPanel chart={overallRefundChart} height={chartSm} />
+                )}
+                {dpRefundChart && (
+                  <ChartPanel chart={dpRefundChart} height={chartSm} />
+                )}
+              </div>
+            )}
+          </section>
 
-          <SectionHeader title="All block received — campus × gender" />
-          {sheetCampusGenderCharts.length > 0 && (
+          {/* Section B — Digital partners (detail) */}
+          <section className="space-y-3 panel p-3 sm:p-4">
+            <SectionHeader
+              title="Digital partners — detail"
+              subtitle="Matched block-paid leads by gender and partner (not refund-adjusted)"
+            />
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {sheetCampusGenderCharts.map((item) => (
-                <ChartPanel
-                  key={`sheet-${item.campus_code}`}
-                  chart={item.gender_chart}
-                  height={220}
-                />
-              ))}
-            </div>
-          )}
-          <DataTable
-            data={tableRows}
-            columns={columns}
-            exportFilename="sheet_campus_bifurcation.csv"
-            searchPlaceholder="Search campus…"
-            height="auto"
-          />
-
-          <SectionHeader
-            title="Digital partner block paid by campus & gender"
-            subtitle="Matched digital-partner leads only — campus from SeatBlocking: CollegeCode"
-          />
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
-            <div className="lg:col-span-7">
-              {campusChart && <ChartPanel chart={campusChart} height={240} />}
-            </div>
-            <div className="lg:col-span-5">
-              {genderChart && <ChartPanel chart={genderChart} height={240} />}
-            </div>
-          </div>
-
-          <SectionHeader title="Digital partner — campus × gender" />
-          {campusGenderCharts.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {genderChart && <ChartPanel chart={genderChart} height={chartMd} />}
               {campusGenderCharts.map((item) => (
                 <ChartPanel
                   key={item.campus_code}
                   chart={item.gender_chart}
-                  height={220}
+                  height={chartMd}
                 />
               ))}
             </div>
-          )}
+            {(partnerGenderChart || partnerCampusChart) && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 pt-2 border-t border-border">
+                {partnerGenderChart && (
+                  <ChartPanel chart={partnerGenderChart} height={chartLg} />
+                )}
+                {partnerCampusChart && (
+                  <ChartPanel chart={partnerCampusChart} height={chartLg} />
+                )}
+              </div>
+            )}
+          </section>
 
-          <SectionHeader
-            title="Share of digital partner"
-            subtitle="Partner attribution from master — by gender and campus"
-          />
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            {partnerGenderChart && (
-              <ChartPanel chart={partnerGenderChart} height={280} />
-            )}
-            {partnerCampusChart && (
-              <ChartPanel chart={partnerCampusChart} height={280} />
-            )}
-          </div>
+          {/* Section C — By campus */}
+          <section className="space-y-3 panel p-3 sm:p-4">
+            <SectionHeader
+              title="By campus"
+              subtitle="Active vs gross block on each campus (payment sheet)"
+            />
+            <DataTable
+              data={campusTableRows}
+              columns={campusColumns}
+              exportFilename="campus_block_summary.csv"
+              searchPlaceholder="Search campus…"
+              height="auto"
+            />
+          </section>
         </>
       )}
     </div>

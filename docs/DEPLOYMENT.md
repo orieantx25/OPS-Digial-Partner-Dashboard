@@ -93,6 +93,30 @@ https://analytics.ugsot.com/api/public/card/546e2871-cdb2-45c9-9f63-6ef4bcf0f2d1
 
 On upload, if **Source at Payment** / **Campaign at Payment** are blank or `Not Found`, the API derives them from **Utm Activity** (`utm_source` → source, `utm_campaign` → campaign after the `application-fee` segment). Pre-filled columns are kept. After upload, copy `backend/data/` to the Railway volume when refreshing the public site.
 
+### Refund cases sheet (Google Sheets)
+
+Refund tracking syncs automatically on **Sync LSQ**. Manual Excel/CSV upload is also supported on the **Refunds** tab.
+
+**Sheet:** [All Refund Cases](https://docs.google.com/spreadsheets/d/14hrVKxRmitMsd2QNb3LhNaBbM59qwhH0oDJBu7hC66g/edit?gid=0) (Admissions team — share as **Anyone with the link can view**)
+
+#### Option A — Public CSV URL (recommended, no service account)
+
+```env
+GOOGLE_REFUND_PUBLIC_CSV_URL=https://docs.google.com/spreadsheets/d/14hrVKxRmitMsd2QNb3LhNaBbM59qwhH0oDJBu7hC66g/export?format=csv&gid=0
+```
+
+Or set `GOOGLE_REFUND_SPREADSHEET_ID` + `GOOGLE_REFUND_SHEET_GID=0` and the backend builds the same export URL.
+
+#### Option B — Service account API (private sheets)
+
+1. Create a Google Cloud **service account** and download the JSON key.
+2. Share the refund Google Sheet with the service account email (Viewer).
+3. Set `GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`.
+
+**Security:** never commit service account JSON to git.
+
+After Sync LSQ, refund rows are written to `refund_tracking.parquet` and campus charts show original vs active (refund-adjusted) totals.
+
 ### 1. Backend on Railway
 
 1. New project → deploy from GitHub → **Root Directory** = `backend` (uses `backend/Dockerfile` + `backend/railway.toml`).

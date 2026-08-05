@@ -26,13 +26,20 @@ const SERIES_COLORS = [
 ];
 const CLASH_SERIES_COLOR = '#FBBF24';
 const CLASH_SERIES_NAME = 'Counsellor Clashes';
+const DP_REFUNDS_SERIES_NAME = 'DP Refunds';
+const DP_REFUNDS_SERIES_COLOR = '#FB923C';
 const BLOCK_SERIES_NAME = 'Block Amount';
-/** Leave room for toolbox (PNG + data view) so legend text does not sit under the icons. */
-const LEGEND_RIGHT_CLEAR_TOOLBOX = 72;
+/** Leave room for toolbox (PNG + data view) when legend stays at the top. */
+const LEGEND_RIGHT_CLEAR_TOOLBOX = 96;
+const LEGEND_SCROLL_THRESHOLD = 4;
+const DESKTOP_BOTTOM_LEGEND_THRESHOLD = 4;
 
-function seriesColor(name: string, index: number): string {
-  if (name === CLASH_SERIES_NAME) return CLASH_SERIES_COLOR;
-  return SERIES_COLORS[index % SERIES_COLORS.length];
+function gridMarginForValueLabels(maxValue: number, compact = false): number {
+  const label = formatNumber(Math.ceil(maxValue * 1.12 || 1));
+  if (compact) {
+    return Math.max(44, Math.ceil(label.length * 5.5) + 10);
+  }
+  return Math.max(68, Math.ceil(label.length * 7.5) + 16);
 }
 
 function maxSeriesValue(series: ChartData['series']): number {
@@ -41,12 +48,17 @@ function maxSeriesValue(series: ChartData['series']): number {
 
 /** Reserve enough left margin for full en-IN labels (e.g. 25,00,000). */
 function gridLeftForChart(series: ChartData['series'], compact = false): number {
-  const max = maxSeriesValue(series);
-  const label = formatNumber(Math.ceil(max * 1.12 || 1));
-  if (compact) {
-    return Math.max(44, Math.ceil(label.length * 5.5) + 10);
-  }
-  return Math.max(68, Math.ceil(label.length * 7.5) + 16);
+  return gridMarginForValueLabels(maxSeriesValue(series), compact);
+}
+
+function gridRightForValueAxis(maxValue: number, compact = false): number {
+  return gridMarginForValueLabels(maxValue, compact);
+}
+
+function seriesColor(name: string, index: number): string {
+  if (name === CLASH_SERIES_NAME) return CLASH_SERIES_COLOR;
+  if (name === DP_REFUNDS_SERIES_NAME) return DP_REFUNDS_SERIES_COLOR;
+  return SERIES_COLORS[index % SERIES_COLORS.length];
 }
 
 function chartGrid(
@@ -89,8 +101,9 @@ function valueYAxis(overrides: Record<string, unknown> = {}) {
     axisLabel: {
       color: '#B5B5B5',
       fontSize: 11,
-      overflow: 'none',
-      hideOverlap: false,
+      overflow: 'truncate',
+      hideOverlap: true,
+      margin: 8,
       formatter: (value: number) => formatNumber(Number(value)),
     },
     ...overrides,
@@ -219,29 +232,83 @@ function buildLineOption(
               opacity: dimmed ? 0.25 : 1,
               fontWeight: focused ? 600 : 'normal',
             }),
-        labelLayout: { hideOverlap: true },
+        labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
         emphasis: { disabled: dimmed },
       };
     }),
   };
 }
 
-function mobileBarLegend(seriesNames: string[]) {
+function multiSeriesLegend(seriesNames: string[], isMobile: boolean) {
+  if (seriesNames.length <= 1) return undefined;
+
+  const scroll = seriesNames.length >= LEGEND_SCROLL_THRESHOLD;
+  const legendAtBottom =
+    isMobile || scroll || seriesNames.length >= DESKTOP_BOTTOM_LEGEND_THRESHOLD;
+
+  if (legendAtBottom) {
+    return {
+      type: 'scroll' as const,
+      orient: 'horizontal' as const,
+      bottom: 4,
+      left: 8,
+      right: 8,
+      icon: 'roundRect',
+      itemWidth: isMobile ? 8 : 10,
+      itemHeight: isMobile ? 8 : 10,
+      itemGap: isMobile ? 8 : 12,
+      pageIconSize: 11,
+      pageIconColor: '#B5B5B5',
+      pageTextStyle: { color: '#B5B5B5', fontSize: 10 },
+      textStyle: { color: '#B5B5B5', fontSize: isMobile ? 10 : 11 },
+      data: seriesNames,
+      selected: Object.fromEntries(seriesNames.map((n) => [n, true])),
+    };
+  }
+
   return {
-    type: 'scroll' as const,
+    type: 'plain' as const,
     orient: 'horizontal' as const,
-    bottom: 0,
-    left: 4,
-    right: 4,
+    top: 8,
+    left: 8,
+    right: LEGEND_RIGHT_CLEAR_TOOLBOX,
     icon: 'roundRect',
-    itemWidth: 8,
-    itemHeight: 8,
-    itemGap: 8,
-    pageIconSize: 10,
-    pageTextStyle: { color: '#B5B5B5', fontSize: 10 },
-    textStyle: { color: '#B5B5B5', fontSize: 10 },
+    itemWidth: 10,
+    itemHeight: 10,
+    itemGap: 12,
+    textStyle: { color: '#B5B5B5', fontSize: 11 },
     data: seriesNames,
     selected: Object.fromEntries(seriesNames.map((n) => [n, true])),
+  };
+}
+
+function gridInsetsForBarLegend(
+  seriesCount: number,
+  isMobile: boolean,
+  multiBar: boolean,
+  legendAtBottom = false
+): { top: number; bottom: number } {
+  if (!multiBar) {
+    return { top: isMobile ? 12 : 36, bottom: isMobile ? 28 : 32 };
+  }
+  if (legendAtBottom) {
+    return {
+      top: isMobile ? 12 : 36,
+      bottom: isMobile
+        ? seriesCount > 1
+          ? 44
+          : 28
+        : seriesCount >= LEGEND_SCROLL_THRESHOLD
+          ? 52
+          : 40,
+    };
+  }
+  if (isMobile) {
+    return { top: 12, bottom: seriesCount > 1 ? 40 : 28 };
+  }
+  return {
+    top: 56,
+    bottom: 32,
   };
 }
 
@@ -275,15 +342,16 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
     toolbox: isMobile
       ? { show: false }
       : {
-          right: 4,
-          top: 0,
+          right: 8,
+          top: 4,
           itemSize: 14,
-          itemGap: 10,
+          itemGap: 12,
           feature: {
             saveAsImage: { title: 'PNG' },
             dataView: { readOnly: true },
           },
           iconStyle: { borderColor: '#B5B5B5' },
+          emphasis: { iconStyle: { borderColor: '#FFFFFF' } },
         },
   };
 
@@ -384,15 +452,7 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
             }
           : base.tooltip,
         legend: multi
-          ? {
-              top: 4,
-              right: LEGEND_RIGHT_CLEAR_TOOLBOX,
-              icon: 'roundRect',
-              itemWidth: 10,
-              itemHeight: 4,
-              textStyle: { color: '#B5B5B5', fontSize: 11 },
-              data: chart.series.map((s) => s.name),
-            }
+          ? multiSeriesLegend(chart.series.map((s) => s.name), isMobile)
           : undefined,
         xAxis: { type: 'category', data: chart.categories, axisLine: { lineStyle: { color: '#3A3A3A' } } },
         yAxis: valueYAxis(),
@@ -423,7 +483,7 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
             label: isMobile
               ? { show: false }
               : valuePointLabel({ color, fontWeight: isExpected ? 600 : 'normal' }),
-            labelLayout: { hideOverlap: true },
+            labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
           };
         }),
       };
@@ -443,22 +503,23 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
           CLASH_SERIES_NAME,
         ]).filter((name) => chart.series.some((s) => s.name === name))
       );
+      const stackBlockList =
+        (chart.extra?.stack_block as string[] | undefined) ?? [
+          BLOCK_SERIES_NAME,
+          CLASH_SERIES_NAME,
+        ];
       const hasBlockStack =
-        stackNames.has(BLOCK_SERIES_NAME) && stackNames.has(CLASH_SERIES_NAME);
+        stackBlockList.length >= 2 &&
+        stackBlockList.every((name) => chart.series.some((s) => s.name === name));
 
+      const legendInsets = gridInsetsForBarLegend(
+        chart.series.length,
+        isMobile,
+        multiBar,
+        chart.series.length >= DESKTOP_BOTTOM_LEGEND_THRESHOLD || isMobile
+      );
       const legend = multiBar
-        ? isMobile
-          ? mobileBarLegend(chart.series.map((s) => s.name))
-          : {
-              top: 4,
-              right: LEGEND_RIGHT_CLEAR_TOOLBOX,
-              icon: 'roundRect',
-              itemWidth: 10,
-              itemHeight: 10,
-              textStyle: { color: '#B5B5B5', fontSize: 11 },
-              data: chart.series.map((s) => s.name),
-              selected: Object.fromEntries(chart.series.map((s) => [s.name, true])),
-            }
+        ? multiSeriesLegend(chart.series.map((s) => s.name), isMobile)
         : undefined;
 
       const showBarLabels = !isMobile;
@@ -466,8 +527,11 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
         const color = seriesColor(s.name, i);
         const stacked = hasBlockStack && stackNames.has(s.name);
         const isClash = s.name === CLASH_SERIES_NAME;
+        const isRefund = s.name === DP_REFUNDS_SERIES_NAME;
         const isCleanBlock = s.name === BLOCK_SERIES_NAME && stacked;
+        const isDeduction = isClash || isRefund;
         const dualIndex = mixedScale ? (i === 0 ? 0 : 1) : 0;
+        const suppressLabel = mixedScale && i === 0;
         return {
           name: s.name,
           type: 'bar' as const,
@@ -479,18 +543,18 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
           barMaxWidth: isMobile ? 18 : undefined,
           data: barSeriesData(s.data),
           itemStyle: { color },
-          label: showBarLabels
+          label: showBarLabels && !suppressLabel
             ? valuePointLabel({
                 position: horizontal
                   ? 'right'
                   : isCleanBlock
                     ? 'inside'
                     : 'top',
-                color: isClash ? CLASH_SERIES_COLOR : isCleanBlock ? '#FFFFFF' : color,
-                fontWeight: isClash || isCleanBlock ? 600 : 'normal',
+                color: isDeduction ? (isRefund ? DP_REFUNDS_SERIES_COLOR : CLASH_SERIES_COLOR) : isCleanBlock ? '#FFFFFF' : color,
+                fontWeight: isDeduction || isCleanBlock ? 600 : 'normal',
               })
             : { show: false },
-          labelLayout: { hideOverlap: true },
+          labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
         };
       });
 
@@ -528,11 +592,11 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
         const valueAxes = mixedScale
           ? [
               valueYAxis({
-                name: isMobile ? '' : chart.series[0]?.name,
-                nameTextStyle: { color: SERIES_COLORS[0], fontSize: 10 },
+                name: '',
                 axisLabel: {
                   color: '#B5B5B5',
                   fontSize: isMobile ? 9 : 11,
+                  hideOverlap: true,
                   formatter: (value: number) => formatNumber(Number(value)),
                 },
               }),
@@ -544,6 +608,7 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
                 axisLabel: {
                   color: '#B5B5B5',
                   fontSize: isMobile ? 9 : 11,
+                  hideOverlap: true,
                   formatter: (value: number) => formatNumber(Number(value)),
                 },
               }),
@@ -562,16 +627,14 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
           grid: {
             left: labelWidth + (isMobile ? 8 : 16),
             right: mixedScale
-              ? isMobile
-                ? 40
-                : 48
+              ? gridRightForValueAxis(secondaryMax, isMobile)
               : isMobile
                 ? chart.categories.length > 8
                   ? 28
                   : 12
                 : 24,
-            top: multiBar ? (isMobile ? 12 : 56) : isMobile ? 12 : 36,
-            bottom: multiBar && isMobile ? 36 : 24,
+            top: legendInsets.top,
+            bottom: isMobile ? legendInsets.bottom : 24,
             containLabel: false,
           },
           legend,
@@ -648,11 +711,13 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
           chart.categories.some((c) => c.includes('\n'));
         return {
           ...base,
-          grid: chartGrid(chart.series, {
-            top: multiBar ? (isMobile ? 12 : 56) : 44,
-            right: isMobile ? 44 : 72,
-            bottom: isMobile ? (multiBar ? 48 : 52) : multilineX ? 56 : 32,
-          }),
+          grid: {
+            left: gridLeftForChart([chart.series[0]], isMobile),
+            right: gridRightForValueAxis(secondaryMax, isMobile),
+            top: legendInsets.top,
+            bottom: isMobile ? (multiBar ? 48 : 52) : multilineX ? 56 : legendInsets.bottom,
+            containLabel: false,
+          },
           legend,
           xAxis: {
             type: 'category',
@@ -689,24 +754,26 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
           },
           yAxis: [
             valueYAxis({
-              name: isMobile ? '' : chart.series[0]?.name,
+              name: '',
               position: 'left',
-              nameTextStyle: { color: SERIES_COLORS[0], fontSize: 10 },
               axisLabel: {
                 color: '#B5B5B5',
                 fontSize: isMobile ? 9 : 11,
+                hideOverlap: true,
+                margin: 8,
                 formatter: (value: number) => formatNumber(Number(value)),
               },
             }),
             valueYAxis({
-              name: isMobile ? '' : 'Block / Offer / Admissions',
+              name: '',
               position: 'right',
               max: Math.ceil(secondaryMax * 1.25),
               splitLine: { show: false },
-              nameTextStyle: { color: SERIES_COLORS[1], fontSize: 10 },
               axisLabel: {
                 color: '#B5B5B5',
                 fontSize: isMobile ? 9 : 11,
+                hideOverlap: true,
+                margin: 8,
                 formatter: (value: number) => formatNumber(Number(value)),
               },
             }),
@@ -720,9 +787,9 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
       return {
         ...base,
         grid: chartGrid(chart.series, {
-          top: multiBar ? (isMobile ? 12 : 56) : 44,
-          bottom: isMobile ? (multiBar ? 48 : 52) : multilineX ? 56 : 32,
-        }),
+          top: legendInsets.top,
+          bottom: isMobile ? (multiBar ? 48 : 52) : multilineX ? 56 : legendInsets.bottom,
+        }, chart.extra),
         legend,
         xAxis: {
           type: 'category',
@@ -777,9 +844,11 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
         title: { show: false, text: '' },
         color: SERIES_COLORS,
         legend: {
-          bottom: 0,
+          bottom: 4,
           left: 'center',
           type: 'scroll',
+          orient: 'horizontal',
+          itemGap: 12,
           textStyle: { color: '#B5B5B5', fontSize: 11 },
           pageTextStyle: { color: '#B5B5B5' },
         },
@@ -842,6 +911,7 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
               : compactDonut && showSliceLabels
                 ? { show: false }
                 : { length: 10, length2: 8, lineStyle: { color: '#3A3A3A' } },
+          labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
         }],
       };
     }
@@ -1093,7 +1163,9 @@ export function ChartPanel({
             </p>
           )}
           {onCategoryClick && !isLeadershipMode() && (
-            <p className="text-[10px] text-text-secondary mb-1">Click a bar or slice to explore leads</p>
+            <p className="text-[10px] text-text-secondary mb-1.5 leading-snug">
+              Click a bar or slice to explore leads
+            </p>
           )}
           <ReactECharts
             option={option}

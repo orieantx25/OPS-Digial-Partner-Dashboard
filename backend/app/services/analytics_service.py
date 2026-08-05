@@ -13,6 +13,7 @@ from app.domain.schema import (
     PARTNER_CANONICAL,
     PARTNER_COMMERCIALS,
     PERSONA_ACTIVITY_TABLE,
+    REFUND_TABLE,
     canonical_partner,
 )
 from app.infrastructure.duckdb_repo import AnalyticsCache, DuckDBRepository
@@ -26,6 +27,7 @@ from app.services.empty_defaults import (
     empty_funnel,
     empty_kpis,
     empty_predictive,
+    empty_refund_cases,
     empty_revenue,
     empty_search,
 )
@@ -633,14 +635,26 @@ class AnalyticsEngine:
             str(item["partner"]): int(item["count"])
             for item in self._counsellor_clash_counts_by_partner(filters)
         }
+        refund_map = {
+            str(item["partner"]): int(item["count"])
+            for item in self._dp_refund_counts_by_partner(filters)
+        }
         block_amounts = [int(r["block_amount"] or 0) for r in rows]
         clash_counts = [
             min(clash_map.get(str(r["partner"]), 0), block_amounts[i])
             for i, r in enumerate(rows)
         ]
-        # Stack clean block amount + clashes so bar height = total block paid.
+        refund_counts = [
+            min(
+                refund_map.get(str(r["partner"]), 0),
+                max(0, block_amounts[i] - clash_counts[i]),
+            )
+            for i, r in enumerate(rows)
+        ]
+        # Stack clean block + clashes + DP refunds so bar height = total block paid.
         clean_blocks = [
-            max(0, block_amounts[i] - clash_counts[i]) for i in range(len(rows))
+            max(0, block_amounts[i] - clash_counts[i] - refund_counts[i])
+            for i in range(len(rows))
         ]
 
         return ChartData(
@@ -653,11 +667,12 @@ class AnalyticsEngine:
                 ChartSeries(name="Offer Letter", data=[int(r["offer_letters"] or 0) for r in rows]),
                 ChartSeries(name="Block Amount", data=clean_blocks),
                 ChartSeries(name="Counsellor Clashes", data=clash_counts),
+                ChartSeries(name="DP Refunds", data=refund_counts),
                 ChartSeries(name="Admissions", data=[int(r["admissions"] or 0) for r in rows]),
             ],
             extra={
                 "block_amount_total": block_amounts,
-                "stack_block": ["Block Amount", "Counsellor Clashes"],
+                "stack_block": ["Block Amount", "Counsellor Clashes", "DP Refunds"],
             },
         )
 
@@ -1423,6 +1438,11 @@ class AnalyticsEngine:
             pname = canonical_partner(item.get("partner")) or str(item.get("partner") or "")
             clash_by_partner[pname] = clash_by_partner.get(pname, 0) + int(item.get("count") or 0)
 
+        refund_by_partner: Dict[str, int] = {}
+        for item in self._dp_refund_counts_by_partner(filters):
+            pname = canonical_partner(item.get("partner")) or str(item.get("partner") or "")
+            refund_by_partner[pname] = refund_by_partner.get(pname, 0) + int(item.get("count") or 0)
+
         revenue_per_admission = float(self.REVENUE_PER_ADMISSION_INR)
         partners_out: List[Dict[str, Any]] = []
         for partner in PARTNER_CANONICAL:
@@ -1435,8 +1455,9 @@ class AnalyticsEngine:
             leads = int(leads_by_partner.get(partner, 0))
             block_paid = int(block_by_partner.get(partner, 0))
             counsellor_clashes = int(clash_by_partner.get(partner, 0))
+            dp_refunds = int(refund_by_partner.get(partner, 0))
             # Hypothesis: Block ROI count stands in for successful admissions.
-            block_roi = max(0, block_paid - counsellor_clashes)
+            block_roi = max(0, block_paid - counsellor_clashes - dp_refunds)
 
             if advance_only:
                 incentive = 0.0
@@ -1474,6 +1495,7 @@ class AnalyticsEngine:
                     "admissions": admissions,
                     "block_amount_paid": block_paid,
                     "counsellor_clashes": counsellor_clashes,
+                    "dp_refunds": dp_refunds,
                     "block_amount_roi": block_roi,
                     "incentive_total": incentive_total,
                     "cost": cost,
@@ -1492,7 +1514,8 @@ class AnalyticsEngine:
                 continue
             block_paid = int(block_by_partner.get(name, 0))
             counsellor_clashes = int(clash_by_partner.get(name, 0))
-            block_roi = max(0, block_paid - counsellor_clashes)
+            dp_refunds = int(refund_by_partner.get(name, 0))
+            block_roi = max(0, block_paid - counsellor_clashes - dp_refunds)
             partners_out.append(
                 {
                     "partner": name,
@@ -1503,6 +1526,7 @@ class AnalyticsEngine:
                     "admissions": admissions,
                     "block_amount_paid": block_paid,
                     "counsellor_clashes": counsellor_clashes,
+                    "dp_refunds": dp_refunds,
                     "block_amount_roi": block_roi,
                     "incentive_total": None,
                     "cost": None,
@@ -1526,6 +1550,7 @@ class AnalyticsEngine:
                 "admissions": sum(int(p["admissions"] or 0) for p in tracked),
                 "block_amount_paid": sum(int(p["block_amount_paid"] or 0) for p in tracked),
                 "counsellor_clashes": sum(int(p["counsellor_clashes"] or 0) for p in tracked),
+                "dp_refunds": sum(int(p.get("dp_refunds") or 0) for p in tracked),
                 "block_amount_roi": sum(int(p["block_amount_roi"] or 0) for p in tracked),
                 "advance_total": sum(float(p["advance"] or 0) for p in tracked),
                 "incentive_total": sum(float(p["incentive_total"] or 0) for p in tracked),
@@ -1540,6 +1565,7 @@ class AnalyticsEngine:
                     1 for p in tracked if p.get("status") == "Below break even"
                 ),
                 "has_clash_sheet": bool(clashes.get("has_sheet")),
+                "has_refund_sheet": self.duck_repo.refund_exists(),
             },
         }
 
@@ -1976,6 +2002,11 @@ class AnalyticsEngine:
             "block_counsellor_clashes": self._get_partner_counsellor_clashes(
                 filters, partner=partner
             ),
+            "block_dp_refunds": self._get_partner_dp_refunds(filters, partner=partner),
+            "dp_refunds": sum(
+                int(x.get("count") or 0)
+                for x in self._dp_refund_counts_by_partner(filters, partner=partner)
+            ),
             "performance_score": self._partner_score(overview[0] if overview else {}),
         }
 
@@ -2034,6 +2065,663 @@ class AnalyticsEngine:
         if name and name != "(blank)":
             return name
         return code
+
+    def _canonical_partner_sql_list(self) -> str:
+        escaped = [p.replace("'", "''") for p in PARTNER_CANONICAL]
+        return ", ".join(f"'{p}'" for p in escaped)
+
+    def _refund_exclude_sql(self, table_alias: str) -> str:
+        """Exclude block-payment rows that match any is_refund refund record."""
+        if not self.duck_repo.refund_exists():
+            return ""
+        prefix = f"{table_alias}."
+        return f"""
+            AND NOT EXISTS (
+                SELECT 1 FROM {REFUND_TABLE} r
+                WHERE r.is_refund
+                  AND (
+                    (r.match_email IS NOT NULL AND {prefix}match_email IS NOT NULL
+                     AND r.match_email = {prefix}match_email)
+                    OR (r.match_phone IS NOT NULL AND {prefix}match_phone IS NOT NULL
+                        AND r.match_phone = {prefix}match_phone)
+                  )
+            )
+        """
+
+    def _build_sheet_bifurcation_bundle(
+        self,
+        detail_rows: List[Dict[str, Any]],
+        sheet_total: int,
+        chart_prefix: str,
+        campus_bar_title: str,
+        gender_donut_title: str,
+        center_label: str = "All received",
+    ) -> Dict[str, Any]:
+        sheet_campus_map: Dict[str, Dict[str, Any]] = {}
+        sheet_gender_totals: Dict[str, int] = {}
+        for r in detail_rows:
+            code = str(r.get("campus_code") or "(blank)")
+            name = self._campus_display_label(code, str(r.get("campus_name") or code))
+            gender = str(r.get("gender") or "(blank)")
+            cnt = int(r.get("count") or 0)
+            sheet_gender_totals[gender] = sheet_gender_totals.get(gender, 0) + cnt
+            if code not in sheet_campus_map:
+                sheet_campus_map[code] = {
+                    "campus_code": code,
+                    "campus_name": name,
+                    "block_paid": 0,
+                    "by_gender": [],
+                }
+            sheet_campus_map[code]["block_paid"] += cnt
+            sheet_campus_map[code]["by_gender"].append({"gender": gender, "count": cnt})
+
+        sheet_by_campus = sorted(
+            sheet_campus_map.values(), key=lambda x: x["block_paid"], reverse=True
+        )
+        sheet_by_gender = [
+            {"gender": g, "count": c}
+            for g, c in sorted(sheet_gender_totals.items(), key=lambda x: x[1], reverse=True)
+        ]
+        sheet_campus_labels = [
+            str(c["campus_name"]) if c["campus_name"] != "(blank)" else c["campus_code"]
+            for c in sheet_by_campus
+        ]
+        sheet_campus_counts = [int(c["block_paid"]) for c in sheet_by_campus]
+
+        slice_extra = {
+            "center_label": "Total",
+            "compact_donut": True,
+            "show_slice_labels": True,
+        }
+        sheet_campus_chart = ChartData(
+            chart_id=f"{chart_prefix}_campus_block_paid",
+            chart_type="bar",
+            title=campus_bar_title,
+            categories=sheet_campus_labels[:20],
+            series=[ChartSeries(name="Block Paid", data=sheet_campus_counts[:20])],
+        )
+        sheet_gender_chart = ChartData(
+            chart_id=f"{chart_prefix}_gender_block_paid",
+            chart_type="donut",
+            title=gender_donut_title,
+            categories=[g["gender"] for g in sheet_by_gender],
+            series=[
+                ChartSeries(name="Block Paid", data=[g["count"] for g in sheet_by_gender])
+            ],
+            extra={
+                **slice_extra,
+                "center_total": sheet_total,
+                "center_label": center_label,
+            },
+        )
+        campus_gender_charts = []
+        for c in sheet_by_campus:
+            genders = c.get("by_gender") or []
+            if not genders:
+                continue
+            code = str(c.get("campus_code") or "campus")
+            slug = re.sub(r"[^\w\-]+", "_", code.strip(), flags=re.UNICODE).strip("_") or "campus"
+            name = str(c.get("campus_name") or code)
+            block_paid = int(c.get("block_paid") or 0)
+            campus_gender_charts.append({
+                "campus_code": code,
+                "campus_name": name,
+                "block_paid": block_paid,
+                "gender_chart": ChartData(
+                    chart_id=f"{chart_prefix}_campus_gender_{slug}",
+                    chart_type="donut",
+                    title=name[:80],
+                    categories=[g["gender"] for g in genders],
+                    series=[
+                        ChartSeries(name="Block Paid", data=[g["count"] for g in genders])
+                    ],
+                    extra={
+                        **slice_extra,
+                        "center_total": block_paid,
+                    },
+                ),
+            })
+
+        return {
+            "by_campus": sheet_by_campus,
+            "by_gender": sheet_by_gender,
+            "campus_chart": sheet_campus_chart,
+            "gender_chart": sheet_gender_chart,
+            "campus_gender_charts": campus_gender_charts,
+        }
+
+    def _refund_summary(self) -> Dict[str, int]:
+        if not self.duck_repo.refund_exists():
+            return {
+                "total_cases": 0,
+                "refund_cases": 0,
+                "refund_processed": 0,
+                "digital_partner_refund_cases": 0,
+                "by_campus": {"SSAHE": 0, "ADYPU": 0},
+                "refunds_applied_by_campus": {"SSAHE": 0, "ADYPU": 0},
+                "dp_refund_requests": {
+                    "total": 0,
+                    "by_campus": {"SSAHE": 0, "ADYPU": 0},
+                    "refunded_by_campus": {"SSAHE": 0, "ADYPU": 0},
+                },
+            }
+        partners = self._canonical_partner_sql_list()
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                COUNT(*) AS total_cases,
+                SUM(CASE WHEN r.is_refund THEN 1 ELSE 0 END) AS refund_cases,
+                SUM(
+                    CASE WHEN r.is_refund AND (
+                        EXISTS (
+                            SELECT 1 FROM {MASTER_DATASET_TABLE} m
+                            WHERE m.block_amount_paid
+                              AND m.partner IN ({partners})
+                              AND (
+                                (r.match_email IS NOT NULL
+                                 AND LOWER(TRIM(COALESCE(m.email, ''))) = r.match_email)
+                                OR (
+                                    r.match_phone IS NOT NULL
+                                    AND regexp_replace(
+                                        COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'
+                                    ) = r.match_phone
+                                    AND LENGTH(r.match_phone) >= 10
+                                )
+                              )
+                        )
+                    ) THEN 1 ELSE 0 END
+                ) AS digital_partner_refund_cases
+            FROM {REFUND_TABLE} r
+            """
+        )
+        row = rows[0] if rows else {}
+        campus_refunds = self._refund_counts_by_campus()
+        return {
+            "total_cases": int(row.get("total_cases") or 0),
+            "refund_cases": int(row.get("refund_cases") or 0),
+            "refund_processed": int(row.get("refund_cases") or 0),
+            "digital_partner_refund_cases": int(
+                row.get("digital_partner_refund_cases") or 0
+            ),
+            "by_campus": campus_refunds["processed"],
+            "refunds_applied_by_campus": campus_refunds["applied"],
+            "dp_refund_requests": self._dp_refund_request_summary(),
+        }
+
+    def _dp_refund_master_match_sql(self, refund_alias: str = "r") -> str:
+        """Refund row matches a block-paid digital partner lead in master."""
+        partners = self._canonical_partner_sql_list()
+        return f"""
+            EXISTS (
+                SELECT 1 FROM {MASTER_DATASET_TABLE} m
+                WHERE m.block_amount_paid
+                  AND m.partner IN ({partners})
+                  AND (
+                    ({refund_alias}.match_email IS NOT NULL
+                     AND LOWER(TRIM(COALESCE(m.email, ''))) = {refund_alias}.match_email)
+                    OR (
+                        {refund_alias}.match_phone IS NOT NULL
+                        AND regexp_replace(
+                            COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'
+                        ) = {refund_alias}.match_phone
+                        AND LENGTH({refund_alias}.match_phone) >= 10
+                    )
+                  )
+            )
+        """
+
+    def _dp_refund_request_summary(self) -> Dict[str, Any]:
+        empty = {
+            "total": 0,
+            "by_campus": {"SSAHE": 0, "ADYPU": 0},
+            "refunded_by_campus": {"SSAHE": 0, "ADYPU": 0},
+        }
+        if not self.duck_repo.refund_exists() or not self._has_data():
+            return empty
+        dp_match = self._dp_refund_master_match_sql("r")
+        ssahe_match = self._refund_campus_match_sql("SSAHE")
+        adypu_match = self._refund_campus_match_sql("ADYPU")
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                SUM(CASE WHEN {dp_match} THEN 1 ELSE 0 END) AS total,
+                SUM(
+                    CASE WHEN {dp_match} AND ({ssahe_match}) THEN 1 ELSE 0 END
+                ) AS ssahe_requests,
+                SUM(
+                    CASE WHEN {dp_match} AND ({adypu_match}) THEN 1 ELSE 0 END
+                ) AS adypu_requests,
+                SUM(
+                    CASE WHEN {dp_match} AND r.is_refund AND ({ssahe_match}) THEN 1 ELSE 0 END
+                ) AS ssahe_refunded,
+                SUM(
+                    CASE WHEN {dp_match} AND r.is_refund AND ({adypu_match}) THEN 1 ELSE 0 END
+                ) AS adypu_refunded
+            FROM {REFUND_TABLE} r
+            """
+        )
+        row = rows[0] if rows else {}
+        return {
+            "total": int(row.get("total") or 0),
+            "by_campus": {
+                "SSAHE": int(row.get("ssahe_requests") or 0),
+                "ADYPU": int(row.get("adypu_requests") or 0),
+            },
+            "refunded_by_campus": {
+                "SSAHE": int(row.get("ssahe_refunded") or 0),
+                "ADYPU": int(row.get("adypu_refunded") or 0),
+            },
+        }
+
+    def _refund_campus_match_sql(self, campus: str) -> str:
+        """SQL predicate for refund row campus/university text (ssahe or adypu)."""
+        if campus == "SSAHE":
+            return (
+                "UPPER(TRIM(COALESCE(r.campus, ''))) LIKE '%SSAHE%'"
+                " OR UPPER(TRIM(COALESCE(r.campus, ''))) LIKE '%TUMKUR%'"
+                " OR UPPER(TRIM(COALESCE(r.university, ''))) LIKE '%SSAHE%'"
+            )
+        return (
+            "UPPER(TRIM(COALESCE(r.campus, ''))) LIKE '%ADYPU%'"
+            " OR UPPER(TRIM(COALESCE(r.campus, ''))) LIKE '%PUNE%'"
+            " OR UPPER(TRIM(COALESCE(r.university, ''))) LIKE '%ADYPU%'"
+        )
+
+    def _refund_counts_by_campus(self) -> Dict[str, Dict[str, int]]:
+        empty = {
+            "applied": {"SSAHE": 0, "ADYPU": 0},
+            "processed": {"SSAHE": 0, "ADYPU": 0},
+        }
+        if not self.duck_repo.refund_exists():
+            return empty
+        ssahe_match = self._refund_campus_match_sql("SSAHE")
+        adypu_match = self._refund_campus_match_sql("ADYPU")
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                SUM(CASE WHEN ({ssahe_match}) THEN 1 ELSE 0 END) AS ssahe_applied,
+                SUM(
+                    CASE WHEN r.is_refund AND ({ssahe_match}) THEN 1 ELSE 0 END
+                ) AS ssahe_processed,
+                SUM(CASE WHEN ({adypu_match}) THEN 1 ELSE 0 END) AS adypu_applied,
+                SUM(
+                    CASE WHEN r.is_refund AND ({adypu_match}) THEN 1 ELSE 0 END
+                ) AS adypu_processed
+            FROM {REFUND_TABLE} r
+            """
+        )
+        row = rows[0] if rows else {}
+        return {
+            "applied": {
+                "SSAHE": int(row.get("ssahe_applied") or 0),
+                "ADYPU": int(row.get("adypu_applied") or 0),
+            },
+            "processed": {
+                "SSAHE": int(row.get("ssahe_processed") or 0),
+                "ADYPU": int(row.get("adypu_processed") or 0),
+            },
+        }
+
+    def _dp_refund_by_campus_chart(self) -> Optional[ChartData]:
+        if not self.duck_repo.refund_exists() or not self.duck_repo.block_payment_exists():
+            return None
+        partners = self._canonical_partner_sql_list()
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                COALESCE(NULLIF(TRIM(CAST(s.college_code AS VARCHAR)), ''), '(blank)') AS campus_code,
+                COALESCE(
+                    NULLIF(TRIM(CAST(s.college_name AS VARCHAR)), ''),
+                    NULLIF(TRIM(CAST(s.college_code AS VARCHAR)), ''),
+                    '(blank)'
+                ) AS campus_name,
+                COUNT(*) AS count
+            FROM {REFUND_TABLE} r
+            INNER JOIN {BLOCK_PAYMENT_TABLE} s ON (
+                (r.match_email IS NOT NULL AND s.match_email IS NOT NULL
+                 AND r.match_email = s.match_email)
+                OR (r.match_phone IS NOT NULL AND s.match_phone IS NOT NULL
+                    AND r.match_phone = s.match_phone)
+            )
+            WHERE r.is_refund
+              AND EXISTS (
+                SELECT 1 FROM {MASTER_DATASET_TABLE} m
+                WHERE m.block_amount_paid
+                  AND m.partner IN ({partners})
+                  AND (
+                    (r.match_email IS NOT NULL
+                     AND LOWER(TRIM(COALESCE(m.email, ''))) = r.match_email)
+                    OR (
+                        r.match_phone IS NOT NULL
+                        AND regexp_replace(
+                            COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'
+                        ) = r.match_phone
+                        AND LENGTH(r.match_phone) >= 10
+                    )
+                  )
+              )
+            GROUP BY 1, 2
+            ORDER BY count DESC
+            """
+        )
+        if not rows:
+            return None
+        categories = []
+        counts = []
+        for r in rows:
+            code = str(r.get("campus_code") or "(blank)")
+            name = self._campus_display_label(code, str(r.get("campus_name") or code))
+            label = name if name != "(blank)" else code
+            categories.append(label)
+            counts.append(int(r.get("count") or 0))
+        return ChartData(
+            chart_id="dp_refund_by_campus",
+            chart_type="bar",
+            title="Digital partner refunds by campus",
+            categories=categories,
+            series=[ChartSeries(name="DP refunds", data=counts)],
+        )
+
+    def _overall_refund_by_campus_chart(self) -> Optional[ChartData]:
+        """All refund cases matched to the block payment sheet, grouped by campus."""
+        if not self.duck_repo.refund_exists() or not self.duck_repo.block_payment_exists():
+            return None
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                COALESCE(NULLIF(TRIM(CAST(s.college_code AS VARCHAR)), ''), '(blank)') AS campus_code,
+                COALESCE(
+                    NULLIF(TRIM(CAST(s.college_name AS VARCHAR)), ''),
+                    NULLIF(TRIM(CAST(s.college_code AS VARCHAR)), ''),
+                    '(blank)'
+                ) AS campus_name,
+                COUNT(*) AS count
+            FROM {REFUND_TABLE} r
+            INNER JOIN {BLOCK_PAYMENT_TABLE} s ON (
+                (r.match_email IS NOT NULL AND s.match_email IS NOT NULL
+                 AND r.match_email = s.match_email)
+                OR (r.match_phone IS NOT NULL AND s.match_phone IS NOT NULL
+                    AND r.match_phone = s.match_phone)
+            )
+            WHERE r.is_refund
+            GROUP BY 1, 2
+            ORDER BY count DESC
+            """
+        )
+        if not rows:
+            return None
+        categories = []
+        counts = []
+        for r in rows:
+            code = str(r.get("campus_code") or "(blank)")
+            name = self._campus_display_label(code, str(r.get("campus_name") or code))
+            label = name if name != "(blank)" else code
+            categories.append(label)
+            counts.append(int(r.get("count") or 0))
+        return ChartData(
+            chart_id="overall_refund_by_campus",
+            chart_type="bar",
+            title="Refund cases by campus",
+            categories=categories,
+            series=[ChartSeries(name="Refunds", data=counts)],
+        )
+
+    def _dp_refund_counts_by_partner(
+        self, filters: FilterParams, partner: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Digital partner refund rows matched to block-paid master leads (filter-scoped)."""
+        if not self.duck_repo.refund_exists() or not self._has_data():
+            return []
+        where, params = self._build_where(filters, "m")
+        partners = self._canonical_partner_sql_list()
+        partner_filter = ""
+        query_params = list(params)
+        if partner:
+            partner_filter = "AND m.partner = ?"
+            query_params.append(partner)
+        filter_clause = f"AND {where.replace('WHERE ', '')}" if where else ""
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT m.partner AS partner, COUNT(*) AS count
+            FROM {REFUND_TABLE} r
+            INNER JOIN {MASTER_DATASET_TABLE} m ON (
+                r.is_refund
+                AND m.block_amount_paid
+                AND m.partner IN ({partners})
+                AND (
+                    (r.match_email IS NOT NULL
+                     AND LOWER(TRIM(COALESCE(m.email, ''))) = r.match_email)
+                    OR (
+                        r.match_phone IS NOT NULL
+                        AND regexp_replace(
+                            COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'
+                        ) = r.match_phone
+                        AND LENGTH(r.match_phone) >= 10
+                    )
+                )
+            )
+            {filter_clause}
+            {partner_filter}
+            GROUP BY m.partner
+            ORDER BY count DESC
+            """,
+            query_params,
+        )
+        return [
+            {"partner": str(r["partner"]), "count": int(r["count"] or 0)}
+            for r in rows
+            if r.get("partner")
+        ]
+
+    def _dp_refund_rows(
+        self, filters: FilterParams, partner: Optional[str] = None, limit: int = 500
+    ) -> List[Dict[str, Any]]:
+        if not self.duck_repo.refund_exists() or not self._has_data():
+            return []
+        where, params = self._build_where(filters, "m")
+        partners = self._canonical_partner_sql_list()
+        partner_filter = ""
+        query_params = list(params)
+        if partner:
+            partner_filter = "AND m.partner = ?"
+            query_params.append(partner)
+        filter_clause = f"AND {where.replace('WHERE ', '')}" if where else ""
+        query_params.append(limit)
+        return self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                m.prospect_id,
+                m.partner,
+                COALESCE(NULLIF(TRIM(m.name), ''), r.student_name) AS name,
+                COALESCE(NULLIF(TRIM(m.email), ''), r.email) AS email,
+                COALESCE(NULLIF(TRIM(CAST(m.phone AS VARCHAR)), ''), r.phone) AS phone,
+                r.final_status,
+                r.campus,
+                r.university,
+                r.utr
+            FROM {REFUND_TABLE} r
+            INNER JOIN {MASTER_DATASET_TABLE} m ON (
+                r.is_refund
+                AND m.block_amount_paid
+                AND m.partner IN ({partners})
+                AND (
+                    (r.match_email IS NOT NULL
+                     AND LOWER(TRIM(COALESCE(m.email, ''))) = r.match_email)
+                    OR (
+                        r.match_phone IS NOT NULL
+                        AND regexp_replace(
+                            COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'
+                        ) = r.match_phone
+                        AND LENGTH(r.match_phone) >= 10
+                    )
+                )
+            )
+            {filter_clause}
+            {partner_filter}
+            ORDER BY m.prospect_id
+            LIMIT ?
+            """,
+            query_params,
+        )
+
+    def _get_partner_dp_refunds(
+        self, filters: FilterParams, partner: Optional[str] = None
+    ) -> Dict[str, Any]:
+        empty = {
+            "has_sheet": False,
+            "total_refunds": 0,
+            "by_partner": [],
+            "rows": [],
+        }
+        if not self.duck_repo.refund_exists():
+            return empty
+        by_partner = self._dp_refund_counts_by_partner(filters, partner=partner)
+        rows = self._dp_refund_rows(filters, partner=partner) if partner else []
+        total = sum(int(item.get("count") or 0) for item in by_partner)
+        return {
+            "has_sheet": True,
+            "total_refunds": total,
+            "by_partner": by_partner,
+            "rows": rows,
+        }
+
+    def get_partner_dp_refunds(self, filters: FilterParams) -> Dict[str, Any]:
+        return self._get_partner_dp_refunds(filters)
+
+    def get_refund_cases(
+        self,
+        filters: FilterParams,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> PaginatedResponse:
+        empty = empty_refund_cases()
+        if not self.duck_repo.refund_exists():
+            return empty
+
+        page = max(1, page)
+        page_size = max(1, min(page_size, 500))
+        search = (filters.search or "").strip().lower()
+        search_clause = ""
+        params: List[Any] = []
+        if search:
+            search_clause = """
+                AND (
+                    LOWER(COALESCE(student_name, '')) LIKE ?
+                    OR LOWER(COALESCE(email, '')) LIKE ?
+                    OR LOWER(COALESCE(phone, '')) LIKE ?
+                    OR LOWER(COALESCE(provisional_id, '')) LIKE ?
+                    OR LOWER(COALESCE(utr, '')) LIKE ?
+                    OR LOWER(COALESCE(final_status, '')) LIKE ?
+                    OR LOWER(COALESCE(campus, '')) LIKE ?
+                )
+            """
+            pattern = f"%{search}%"
+            params.extend([pattern] * 7)
+
+        partners = self._canonical_partner_sql_list()
+        count_row = self.duck_repo.query_dicts(
+            f"SELECT COUNT(*) AS cnt FROM {REFUND_TABLE} WHERE 1=1 {search_clause}",
+            params,
+        )
+        total = int(count_row[0]["cnt"]) if count_row else 0
+        total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+        offset = (page - 1) * page_size
+
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                r.*,
+                EXISTS (
+                    SELECT 1 FROM {BLOCK_PAYMENT_TABLE} s
+                    WHERE (
+                        r.match_email IS NOT NULL
+                        AND s.match_email IS NOT NULL
+                        AND s.match_email = r.match_email
+                    ) OR (
+                        r.match_phone IS NOT NULL
+                        AND s.match_phone IS NOT NULL
+                        AND s.match_phone = r.match_phone
+                    )
+                ) AS matched_to_block_payment,
+                EXISTS (
+                    SELECT 1 FROM {MASTER_DATASET_TABLE} m
+                    WHERE m.block_amount_paid
+                      AND m.partner IN ({partners})
+                      AND (
+                        (r.match_email IS NOT NULL
+                         AND LOWER(TRIM(COALESCE(m.email, ''))) = r.match_email)
+                        OR (
+                            r.match_phone IS NOT NULL
+                            AND regexp_replace(
+                                COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'
+                            ) = r.match_phone
+                            AND LENGTH(r.match_phone) >= 10
+                        )
+                      )
+                ) AS is_digital_partner_block_paid,
+                (
+                    SELECT COALESCE(
+                        NULLIF(TRIM(CAST(s.college_code AS VARCHAR)), ''),
+                        '(blank)'
+                    )
+                    FROM {BLOCK_PAYMENT_TABLE} s
+                    WHERE (
+                        r.match_email IS NOT NULL
+                        AND s.match_email IS NOT NULL
+                        AND s.match_email = r.match_email
+                    ) OR (
+                        r.match_phone IS NOT NULL
+                        AND s.match_phone IS NOT NULL
+                        AND s.match_phone = r.match_phone
+                    )
+                    LIMIT 1
+                ) AS matched_campus_code
+            FROM {REFUND_TABLE} r
+            WHERE 1=1 {search_clause}
+            ORDER BY COALESCE(serial_no, '') DESC, student_name
+            LIMIT ? OFFSET ?
+            """,
+            params + [page_size, offset],
+        )
+
+        items = []
+        for r in rows:
+            items.append({
+                "serial_no": r.get("serial_no"),
+                "utr": r.get("utr"),
+                "status_finance": r.get("status_finance"),
+                "finance_remarks": r.get("finance_remarks"),
+                "final_status": r.get("final_status"),
+                "university": r.get("university"),
+                "student_name": r.get("student_name"),
+                "campus": r.get("campus"),
+                "mentor": r.get("mentor"),
+                "email": r.get("email"),
+                "provisional_id": r.get("provisional_id"),
+                "phone": r.get("phone"),
+                "remarks": r.get("remarks"),
+                "remarks_sst": r.get("remarks_sst"),
+                "admission_team_remarks": r.get("admission_team_remarks"),
+                "remarks_11_jul": r.get("remarks_11_jul"),
+                "remarks_13_jul": r.get("remarks_13_jul"),
+                "remarks_16_jul": r.get("remarks_16_jul"),
+                "calling_remarks_21_jul": r.get("calling_remarks_21_jul"),
+                "mail_link": r.get("mail_link"),
+                "is_refund": bool(r.get("is_refund")),
+                "matched_to_block_payment": bool(r.get("matched_to_block_payment")),
+                "is_digital_partner_block_paid": bool(
+                    r.get("is_digital_partner_block_paid")
+                ),
+                "matched_campus_code": r.get("matched_campus_code"),
+            })
+
+        return PaginatedResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+        )
 
     def _matched_block_payment_cte(self, where: str, block_clause: str) -> str:
         """Shared CTE: block-paid master rows matched to payment sheet by email then phone."""
@@ -2996,6 +3684,7 @@ class AnalyticsEngine:
         )
 
         # Full payment sheet — all block amounts (not limited to digital-partner matches).
+        refund_exclude = self._refund_exclude_sql("s")
         sheet_detail_rows = self.duck_repo.query_dicts(
             f"""
             SELECT
@@ -3013,90 +3702,75 @@ class AnalyticsEngine:
             """
         )
 
-        sheet_campus_map: Dict[str, Dict[str, Any]] = {}
-        sheet_gender_totals: Dict[str, int] = {}
-        for r in sheet_detail_rows:
-            code = str(r.get("campus_code") or "(blank)")
-            name = self._campus_display_label(code, str(r.get("campus_name") or code))
-            gender = str(r.get("gender") or "(blank)")
-            cnt = int(r.get("count") or 0)
-            sheet_gender_totals[gender] = sheet_gender_totals.get(gender, 0) + cnt
-            if code not in sheet_campus_map:
-                sheet_campus_map[code] = {
-                    "campus_code": code,
-                    "campus_name": name,
-                    "block_paid": 0,
-                    "by_gender": [],
-                }
-            sheet_campus_map[code]["block_paid"] += cnt
-            sheet_campus_map[code]["by_gender"].append({"gender": gender, "count": cnt})
-
-        sheet_by_campus = sorted(
-            sheet_campus_map.values(), key=lambda x: x["block_paid"], reverse=True
+        sheet_bundle = self._build_sheet_bifurcation_bundle(
+            sheet_detail_rows,
+            sheet_total,
+            "sheet",
+            "All block received by campus",
+            "All block received by gender",
+            "All received",
         )
-        sheet_by_gender = [
-            {"gender": g, "count": c}
-            for g, c in sorted(sheet_gender_totals.items(), key=lambda x: x[1], reverse=True)
-        ]
-        sheet_campus_labels = [
-            str(c["campus_name"]) if c["campus_name"] != "(blank)" else c["campus_code"]
-            for c in sheet_by_campus
-        ]
-        sheet_campus_counts = [int(c["block_paid"]) for c in sheet_by_campus]
+        sheet_by_campus = sheet_bundle["by_campus"]
+        sheet_by_gender = sheet_bundle["by_gender"]
+        sheet_campus_chart = sheet_bundle["campus_chart"]
+        sheet_gender_chart = sheet_bundle["gender_chart"]
+        sheet_campus_gender_charts = sheet_bundle["campus_gender_charts"]
+
+        adjusted_sheet_total = sheet_total
+        adjusted_bundle: Dict[str, Any] = {}
+        if refund_exclude:
+            adjusted_total_rows = self.duck_repo.query_dicts(
+                f"""
+                SELECT COUNT(*) AS cnt FROM {BLOCK_PAYMENT_TABLE} s
+                WHERE 1=1 {refund_exclude}
+                """
+            )
+            adjusted_sheet_total = (
+                int(adjusted_total_rows[0]["cnt"]) if adjusted_total_rows else sheet_total
+            )
+            adjusted_detail_rows = self.duck_repo.query_dicts(
+                f"""
+                SELECT
+                    COALESCE(NULLIF(TRIM(CAST(s.college_code AS VARCHAR)), ''), '(blank)') AS campus_code,
+                    COALESCE(
+                        NULLIF(TRIM(CAST(s.college_name AS VARCHAR)), ''),
+                        NULLIF(TRIM(CAST(s.college_code AS VARCHAR)), ''),
+                        '(blank)'
+                    ) AS campus_name,
+                    COALESCE(NULLIF(TRIM(CAST(s.gender AS VARCHAR)), ''), '(blank)') AS gender,
+                    COUNT(*) AS count
+                FROM {BLOCK_PAYMENT_TABLE} s
+                WHERE 1=1 {refund_exclude}
+                GROUP BY 1, 2, 3
+                ORDER BY count DESC
+                """
+            )
+            adjusted_bundle = self._build_sheet_bifurcation_bundle(
+                adjusted_detail_rows,
+                adjusted_sheet_total,
+                "adjusted_sheet",
+                "Active block received by campus",
+                "Active block received by gender",
+                "Active total",
+            )
+
+        unassigned_rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT COUNT(*) AS cnt FROM {BLOCK_PAYMENT_TABLE}
+            WHERE TRIM(COALESCE(CAST(college_code AS VARCHAR), '')) = ''
+               OR TRIM(COALESCE(CAST(gender AS VARCHAR), '')) = ''
+            """
+        )
+        sheet_unassigned_count = int(unassigned_rows[0]["cnt"]) if unassigned_rows else 0
+        refund_summary = self._refund_summary()
+        dp_refund_by_campus_chart = self._dp_refund_by_campus_chart()
+        overall_refund_by_campus_chart = self._overall_refund_by_campus_chart()
 
         slice_extra = {
             "center_label": "Total",
             "compact_donut": True,
             "show_slice_labels": True,
         }
-        sheet_campus_chart = ChartData(
-            chart_id="sheet_campus_block_paid",
-            chart_type="bar",
-            title="All block received by campus",
-            categories=sheet_campus_labels[:20],
-            series=[ChartSeries(name="Block Paid", data=sheet_campus_counts[:20])],
-        )
-        sheet_gender_chart = ChartData(
-            chart_id="sheet_gender_block_paid",
-            chart_type="donut",
-            title="All block received by gender",
-            categories=[g["gender"] for g in sheet_by_gender],
-            series=[
-                ChartSeries(name="Block Paid", data=[g["count"] for g in sheet_by_gender])
-            ],
-            extra={
-                **slice_extra,
-                "center_total": sheet_total,
-                "center_label": "All received",
-            },
-        )
-        sheet_campus_gender_charts = []
-        for c in sheet_by_campus:
-            genders = c.get("by_gender") or []
-            if not genders:
-                continue
-            code = str(c.get("campus_code") or "campus")
-            slug = re.sub(r"[^\w\-]+", "_", code.strip(), flags=re.UNICODE).strip("_") or "campus"
-            name = str(c.get("campus_name") or code)
-            block_paid = int(c.get("block_paid") or 0)
-            sheet_campus_gender_charts.append({
-                "campus_code": code,
-                "campus_name": name,
-                "block_paid": block_paid,
-                "gender_chart": ChartData(
-                    chart_id=f"sheet_campus_gender_{slug}",
-                    chart_type="donut",
-                    title=name[:80],
-                    categories=[g["gender"] for g in genders],
-                    series=[
-                        ChartSeries(name="Block Paid", data=[g["count"] for g in genders])
-                    ],
-                    extra={
-                        **slice_extra,
-                        "center_total": block_paid,
-                    },
-                ),
-            })
 
         campus_map: Dict[str, Dict[str, Any]] = {}
         gender_totals: Dict[str, int] = {}
@@ -3363,6 +4037,18 @@ class AnalyticsEngine:
             ),
             "partner_gender_chart": partner_gender_chart,
             "partner_campus_chart": partner_campus_chart,
+            "refund_summary": refund_summary,
+            "sheet_unassigned_count": sheet_unassigned_count,
+            "adjusted_sheet_total": adjusted_sheet_total,
+            "adjusted_sheet_by_campus": adjusted_bundle.get("by_campus", []),
+            "adjusted_sheet_by_gender": adjusted_bundle.get("by_gender", []),
+            "adjusted_sheet_campus_chart": adjusted_bundle.get("campus_chart"),
+            "adjusted_sheet_gender_chart": adjusted_bundle.get("gender_chart"),
+            "adjusted_sheet_campus_gender_charts": adjusted_bundle.get(
+                "campus_gender_charts", []
+            ),
+            "dp_refund_by_campus_chart": dp_refund_by_campus_chart,
+            "overall_refund_by_campus_chart": overall_refund_by_campus_chart,
         }
 
     def get_anomalies(self, filters: FilterParams) -> List[AlertItem]:

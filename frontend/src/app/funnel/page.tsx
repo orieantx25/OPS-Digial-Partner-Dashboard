@@ -12,6 +12,7 @@ import { PageHeader, SectionHeader } from '@/components/dashboard/section-header
 import { DataTable } from '@/components/tables/data-table';
 import { EMPTY_EXECUTIVE_CHARTS } from '@/lib/empty-defaults';
 import { FUNNEL_STAGE_LEAD_FILTERS } from '@/lib/funnel-filters';
+import { dpRefundInsightItems } from '@/lib/dp-refund-insights';
 import { KPI_LEAD_FILTERS } from '@/lib/lead-filters';
 import { useLeadExplorerStore } from '@/store/lead-explorer-store';
 import { cn, formatNumber, formatPct } from '@/lib/utils';
@@ -41,6 +42,16 @@ export default function FunnelPage() {
   const { data: cohorts } = useFetch({
     fetcher: () => api.getCohorts(filters, cohortBy),
     deps: [JSON.stringify(filters), cohortBy],
+  });
+
+  const { data: campusBifurcation } = useFetch({
+    fetcher: () => api.getCampusBifurcation(filters),
+    deps: [JSON.stringify(filters)],
+  });
+
+  const { data: partnerComparison } = useFetch({
+    fetcher: () => api.getPartner(filters) as Promise<import('@/types').ChartData>,
+    deps: [JSON.stringify(filters)],
   });
 
   const displayFunnel = funnel ?? EMPTY_EXECUTIVE_CHARTS.funnel;
@@ -74,6 +85,7 @@ export default function FunnelPage() {
     }
     const leadCount = Number(displayFunnel.series[0]?.data[0] || 0);
     const connectedIdx = displayFunnel.categories.indexOf('Connected');
+    const offerLetterIdx = displayFunnel.categories.indexOf('Offer Letter');
     const blockIdx = displayFunnel.categories.indexOf('Block Amount Paid');
     if (leadCount > 0 && connectedIdx >= 0) {
       const connected = Number(displayFunnel.series[0]?.data[connectedIdx] || 0);
@@ -87,21 +99,39 @@ export default function FunnelPage() {
             }),
       });
     }
-    if (leadCount > 0 && blockIdx >= 0) {
+    if (blockIdx >= 0) {
       const block = Number(displayFunnel.series[0]?.data[blockIdx] || 0);
-      items.push({
-        text: `Lead → Block Amount Paid: ${formatPct((block / leadCount) * 100)} (${formatNumber(block)}).`,
-        ...(leadership
-          ? {}
-          : {
-              actionLabel: 'Explore',
-              onAction: () =>
-                openExplorer('Block Amount Paid', KPI_LEAD_FILTERS.block_amount_paid),
-            }),
-      });
+      const offerLetters =
+        offerLetterIdx >= 0
+          ? Number(displayFunnel.series[0]?.data[offerLetterIdx] || 0)
+          : 0;
+      if (offerLetters > 0) {
+        items.push({
+          text: `Offer Letter → Block Amount Paid: ${formatPct((block / offerLetters) * 100)} (${formatNumber(block)} of ${formatNumber(offerLetters)} offer letters).`,
+          ...(leadership
+            ? {}
+            : {
+                actionLabel: 'Explore',
+                onAction: () =>
+                  openExplorer('Block Amount Paid', KPI_LEAD_FILTERS.block_amount_paid),
+              }),
+        });
+      } else if (block > 0) {
+        items.push({
+          text: `Block amount paid: ${formatNumber(block)} (no offer letters in scope to convert from).`,
+          ...(leadership
+            ? {}
+            : {
+                actionLabel: 'Explore',
+                onAction: () =>
+                  openExplorer('Block Amount Paid', KPI_LEAD_FILTERS.block_amount_paid),
+              }),
+        });
+      }
     }
-    return items.slice(0, 3);
-  }, [displayFunnel, drops, openExplorer, leadership]);
+    items.push(...dpRefundInsightItems(campusBifurcation, partnerComparison));
+    return items.slice(0, 5);
+  }, [displayFunnel, drops, openExplorer, leadership, campusBifurcation, partnerComparison]);
 
   const cohortColumns: ColumnDef<Record<string, unknown>>[] = [
     { accessorKey: 'cohort', header: 'Cohort' },

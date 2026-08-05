@@ -6,7 +6,7 @@ export type InsightItem = { text: string };
 /** Build insight bullets about digital partner refunds for overview / funnel strips. */
 export function dpRefundInsightItems(
   campus?: CampusBifurcation | null,
-  partnerComparison?: ChartData | undefined
+  partnerComparison?: ChartData | null | undefined
 ): InsightItem[] {
   const items: InsightItem[] = [];
   const refund = campus?.refund_summary;
@@ -16,7 +16,10 @@ export function dpRefundInsightItems(
     const refundSeries =
       partnerComparison.series.find((s) => s.name === 'DP Refunds')?.data ?? [];
     const categories = partnerComparison.categories ?? [];
-    const totalDpRefunds = refundSeries.reduce((sum, v) => sum + Number(v || 0), 0);
+    const totalDpRefunds = refundSeries.reduce<number>(
+      (sum, v) => sum + Number(v || 0),
+      0
+    );
 
     if (totalDpRefunds > 0) {
       items.push({

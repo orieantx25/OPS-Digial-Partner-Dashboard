@@ -51,9 +51,12 @@ export default function CampusPage() {
     const adjustedList = data?.adjusted_sheet_by_campus ?? [];
     const grossMap = new Map(grossList.map((r) => [r.campus_code, r]));
     const adjMap = new Map(adjustedList.map((r) => [r.campus_code, r]));
-    const codes = new Set([...grossMap.keys(), ...adjMap.keys()]);
+    const codes = new Set([
+      ...grossList.map((r) => r.campus_code),
+      ...adjustedList.map((r) => r.campus_code),
+    ]);
 
-    return [...codes]
+    return Array.from(codes)
       .map((code) => {
         const adj = adjMap.get(code);
         const gross = grossMap.get(code);

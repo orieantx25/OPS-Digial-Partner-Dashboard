@@ -11,15 +11,7 @@ type ConfigState = 'loading' | 'ready' | 'disabled';
 
 const LSQ_SYNC_ENABLED = process.env.NEXT_PUBLIC_ENABLE_LSQ_SYNC === 'true';
 
-type LeadSquaredSyncButtonProps = {
-  variant?: 'default' | 'header';
-  syncLabel?: string;
-};
-
-export function LeadSquaredSyncButton({
-  variant = 'default',
-  syncLabel = 'Sync',
-}: LeadSquaredSyncButtonProps) {
+export function LeadSquaredSyncButton() {
   const bumpDataRefresh = useUploadStore((s) => s.bumpDataRefresh);
   const [configState, setConfigState] = useState<ConfigState>('loading');
   const [disableReason, setDisableReason] = useState<string>(
@@ -218,29 +210,6 @@ export function LeadSquaredSyncButton({
         ? `Last sync: ${lastRun}`
         : 'Pull latest leads from LeadSquared'
       : disableReason;
-
-  if (variant === 'header') {
-    return (
-      <button
-        type="button"
-        className={cn(
-          'btn-secondary flex h-[30px] items-center px-3 text-xs shrink-0',
-          busy && 'cursor-wait opacity-90',
-          !canSync && !busy && 'opacity-50'
-        )}
-        title={syncTitle}
-        onClick={() => startSync('incremental')}
-        disabled={!canSync}
-      >
-        {busy || configState === 'loading' ? (
-          <Loader2 className="h-3 w-3 shrink-0 animate-spin mr-1.5" />
-        ) : null}
-        <span className="whitespace-nowrap">
-          {busy ? `Syncing ${Math.round(percent)}%` : syncLabel}
-        </span>
-      </button>
-    );
-  }
 
   return (
     <div className="flex flex-col gap-0.5 min-w-0">

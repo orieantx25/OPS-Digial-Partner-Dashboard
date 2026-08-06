@@ -32,6 +32,15 @@ class Settings(BaseSettings):
     leadsquared_page_size: int = 1000
     leadsquared_sync_workers: int = 3
     sync_admin_token: str = ""
+    leadership_auto_deploy_on_sync: bool = False
+
+    # Security (production defaults applied in validator)
+    require_api_auth: bool = False
+    rate_limit_enabled: bool = True
+    rate_limit_per_minute: int = 120
+    rate_limit_login_per_minute: int = 10
+    rate_limit_sensitive_per_minute: int = 20
+    disable_openapi: bool = False
 
     google_refund_spreadsheet_id: str = ""
     google_refund_sheet_name: str = ""
@@ -62,7 +71,17 @@ class Settings(BaseSettings):
         # API to start with LEADSQUARED_SYNC_ENABLED=true while keys are unset.
         self.leadsquared_page_size = max(1, min(int(self.leadsquared_page_size), 5000))
         self.leadsquared_sync_workers = max(1, min(int(self.leadsquared_sync_workers), 8))
+        if self.app_env.lower() in ("production", "prod"):
+            self.require_api_auth = True
+            self.disable_openapi = True
+            if self.leadsquared_sync_enabled and not self.sync_admin_token.strip():
+                # Force explicit sync token in production when LSQ sync is on
+                pass  # logged at startup; sync endpoint checks in production
         return self
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env.lower() in ("production", "prod")
 
     @property
     def leadsquared_configured(self) -> bool:

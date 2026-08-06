@@ -12,6 +12,7 @@
     "test": "npm run test --prefix frontend",
     "install:frontend": "npm install --prefix frontend",
     "setup:backend": "cd backend && python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt",
-    "publish:snapshots": "python backend/scripts/publish_snapshots.py"
+    "publish:snapshots": "python backend/scripts/publish_snapshots.py",
+    "sync:deploy": "python backend/scripts/sync_publish_deploy.py"
   }
 }

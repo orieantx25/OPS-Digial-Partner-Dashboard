@@ -11,8 +11,8 @@ Leadership viewers get a **static Next.js** app on Vercel. Charts load from JSON
 
 ### Day-to-day publish loop
 
-1. Locally: upload / Sync LSQ as usual (`uvicorn` + `npm run dev`).
-2. Publish snapshots:
+1. Locally: upload / Sync LSQ as usual (`uvicorn` + `npm run dev`), or use one-click deploy (below).
+2. Publish snapshots (or use one-click):
 
 ```bash
 npm run publish:snapshots
@@ -21,6 +21,12 @@ npm run publish:snapshots
 
 3. Commit and push `frontend/public/data/snapshots/` (JSON only — do **not** commit `backend/data/*.parquet` or `.env`).
 4. Vercel rebuilds from `frontend/` Root Directory.
+
+#### One-click sync → publish → deploy (dashboard)
+
+Set `LEADERSHIP_AUTO_DEPLOY_ON_SYNC=true` in `backend/.env`. Click **Sync & deploy** in the ops UI (same as Sync LSQ) — no separate terminal commands. Existing block payment / Metabase CSV data is kept if you did not upload a new file.
+
+CLI fallback: `npm run sync:deploy` when auto-deploy is disabled.
 
 ### Vercel project settings
 
@@ -39,6 +45,8 @@ NEXT_PUBLIC_AUTO_LOGIN=false
 ```
 
 Do **not** set `NEXT_PUBLIC_API_URL` in this mode (API rewrites are disabled).
+
+Security: see [`docs/SECURITY.md`](SECURITY.md). Use Vercel Deployment Protection on the leadership URL.
 
 ### What leadership can / cannot do
 

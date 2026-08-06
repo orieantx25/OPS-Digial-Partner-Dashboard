@@ -2,8 +2,8 @@
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from app.api.dependencies import get_analytics_engine, parse_filters
-from app.domain.models import FilterParams, PaginatedResponse
+from app.api.dependencies import get_analytics_engine, parse_filters, require_authenticated_user, require_write_access
+from app.domain.models import FilterParams, PaginatedResponse, UserInfo
 from app.logging_config import get_logger
 from app.services.analytics_service import AnalyticsEngine
 from app.services.refund_service import RefundService
@@ -17,7 +17,10 @@ def get_refund_service() -> RefundService:
 
 
 @router.get("/status")
-async def refund_status(service: RefundService = Depends(get_refund_service)):
+async def refund_status(
+    service: RefundService = Depends(get_refund_service),
+    user: UserInfo = Depends(require_authenticated_user),
+):
     return service.get_status()
 
 
@@ -25,6 +28,7 @@ async def refund_status(service: RefundService = Depends(get_refund_service)):
 async def upload_refund_sheet(
     file: UploadFile = File(...),
     service: RefundService = Depends(get_refund_service),
+    user: UserInfo = Depends(require_write_access),
 ):
     if not file.filename:
         raise HTTPException(
@@ -50,6 +54,7 @@ async def upload_refund_sheet(
         result = service.upload_sheet(file.filename, content)
         logger.info(
             "refund_uploaded",
+            user=user.username,
             filename=file.filename,
             rows=result.get("row_count"),
         )

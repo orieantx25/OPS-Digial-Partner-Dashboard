@@ -1,0 +1,3 @@
+# Leadership snapshots are aggregated metrics only; discourage bulk indexing.
+User-agent: *
+Disallow: /data/snapshots/

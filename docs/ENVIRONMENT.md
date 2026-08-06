@@ -28,6 +28,7 @@
 | LEADSQUARED_PAGE_SIZE | 1000 | Sync page size |
 | LEADSQUARED_SYNC_WORKERS | 3 | Parallel window fetch workers |
 | SYNC_ADMIN_TOKEN | | Optional token for sync endpoints |
+| LEADERSHIP_AUTO_DEPLOY_ON_SYNC | false | After Sync LSQ, publish snapshots and `git push` to `main` (local ops only) |
 
 ### Public backend (Railway / Render)
 

@@ -5,17 +5,23 @@ from __future__ import annotations
 import threading
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from app.api.dependencies import require_write_access
 from app.config import get_settings
 from app.logging_config import get_logger
 from app.services.job_store import job_store
+from app.services.leadership_deploy_service import deploy_leadership_snapshots
 from app.services.leadsquared_sync_service import LeadSquaredSyncService
 
-router = APIRouter(prefix="/sync", tags=["sync"])
+router = APIRouter(
+    prefix="/sync",
+    tags=["sync"],
+    dependencies=[Depends(require_write_access)],
+)
 logger = get_logger(__name__)
 
 
@@ -50,11 +56,12 @@ def _require_sync_access(x_sync_token: Optional[str]) -> None:
             detail="LeadSquared sync is not enabled on this server",
         )
     expected = settings.sync_admin_token.strip()
-    if expected and (not x_sync_token or x_sync_token.strip() != expected):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid or missing sync token",
-        )
+    if settings.is_production or expected:
+        if not expected or not x_sync_token or x_sync_token.strip() != expected:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Invalid or missing sync token",
+            )
 
 
 def _run_sync_job(
@@ -93,14 +100,49 @@ def _run_sync_job(
             progress_cb=cb,
             run_id=job_id,
         )
+
+        message = result.get("message", "Sync completed")
+        report: Dict[str, Any] = dict(result)
+        deploy_info = None
+
+        if settings.leadership_auto_deploy_on_sync:
+            def deploy_cb(percent: float, phase: str) -> None:
+                job_store.update(
+                    job_id,
+                    status="processing",
+                    percent=percent,
+                    phase=phase,
+                )
+
+            try:
+                deploy_info = deploy_leadership_snapshots(progress_cb=deploy_cb)
+                report["leadership_deploy"] = deploy_info
+                deploy_msg = deploy_info.get("message") or "Leadership deploy complete"
+                message = f"{message}; {deploy_msg}"
+            except Exception as deploy_exc:
+                logger.error(
+                    "leadership_deploy_failed",
+                    job_id=job_id,
+                    error=str(deploy_exc),
+                )
+                job_store.update(
+                    job_id,
+                    status="failed",
+                    phase="Deploy failed",
+                    error=str(deploy_exc),
+                    message=f"Sync OK but leadership deploy failed: {deploy_exc}",
+                    report=report,
+                )
+                return
+
         job_store.update(
             job_id,
             status="completed",
             percent=100.0,
             phase="Completed",
             rows_processed=int(result.get("master_total_rows") or 0),
-            message=result.get("message", "Sync completed"),
-            report=result,
+            message=message,
+            report=report,
         )
         logger.info("lsq_sync_job_done", job_id=job_id, mode=mode)
     except Exception as exc:

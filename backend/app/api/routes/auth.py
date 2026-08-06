@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from app.api.dependencies import get_auth_service, get_current_user
+from app.api.dependencies import get_auth_service, get_current_user, require_authenticated_user
 from app.domain.models import UserInfo
 from app.services.auth_service import AuthService
 
@@ -31,5 +31,5 @@ async def login(body: LoginRequest, auth: AuthService = Depends(get_auth_service
 
 
 @router.get("/me", response_model=UserInfo)
-async def me(user: UserInfo = Depends(get_current_user)):
+async def me(user: UserInfo = Depends(require_authenticated_user)):
     return user

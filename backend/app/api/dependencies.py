@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.config import get_settings
 from app.domain.models import FilterParams, UserInfo, UserRole
 from app.infrastructure.duckdb_repo import AnalyticsCache, DuckDBRepository
 from app.services.analytics_service import AnalyticsEngine
@@ -68,7 +69,21 @@ async def get_current_user(
     return user
 
 
-def require_write_access(user: UserInfo = Depends(get_current_user), auth: AuthService = Depends(get_auth_service)):
+async def require_authenticated_user(
+    user: UserInfo = Depends(get_current_user),
+) -> UserInfo:
+    settings = get_settings()
+    if settings.require_api_auth and (
+        user.username == "anonymous" or user.id == "anonymous"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+    return user
+
+
+def require_write_access(user: UserInfo = Depends(require_authenticated_user), auth: AuthService = Depends(get_auth_service)):
     if not auth.can_write(user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Write access required")
     return user
@@ -95,7 +110,7 @@ def parse_filters(
     prospect_id: Optional[str] = None,
     search: Optional[str] = None,
     lead_filter: Optional[str] = None,
-    user: UserInfo = Depends(get_current_user),
+    user: UserInfo = Depends(require_authenticated_user),
     auth: AuthService = Depends(get_auth_service),
 ) -> FilterParams:
     def split_list(val: Optional[str]) -> Optional[list]:

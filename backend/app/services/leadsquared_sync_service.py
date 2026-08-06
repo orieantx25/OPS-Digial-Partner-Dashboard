@@ -59,6 +59,7 @@ class LeadSquaredSyncService:
             "requires_token": bool(self.settings.sync_admin_token.strip()),
             "page_size": self.settings.leadsquared_page_size,
             "sync_workers": self.settings.leadsquared_sync_workers,
+            "auto_deploy_leadership": self.settings.leadership_auto_deploy_on_sync,
         }
 
     def get_last_run(self) -> Optional[Dict[str, Any]]:

@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
-    "publish:snapshots": "python ../backend/scripts/publish_snapshots.py"
+    "publish:snapshots": "python ../backend/scripts/publish_snapshots.py",
+    "sync:deploy": "python ../backend/scripts/sync_publish_deploy.py"
   },
   "dependencies": {
     "@tanstack/react-table": "^8.20.5",

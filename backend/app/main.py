@@ -9,6 +9,7 @@ from app.api.routes import analytics, auth, block_payment, persona_activity, ref
 from app.config import get_settings
 from app.infrastructure.database import init_metadata_db
 from app.logging_config import get_logger, setup_logging
+from app.middleware.security import RateLimitMiddleware, SecurityHeadersMiddleware
 from app.services.auth_service import AuthService
 
 setup_logging()
@@ -21,7 +22,17 @@ async def lifespan(app: FastAPI):
     settings.ensure_directories()
     init_metadata_db()
     AuthService().seed_users()
-    logger.info("application_started", env=settings.app_env)
+    if settings.is_production and settings.leadsquared_sync_enabled:
+        if not settings.sync_admin_token.strip():
+            logger.warning(
+                "security_sync_token_missing",
+                hint="Set SYNC_ADMIN_TOKEN in production to protect sync endpoints",
+            )
+    logger.info(
+        "application_started",
+        env=settings.app_env,
+        require_api_auth=settings.require_api_auth,
+    )
     yield
     logger.info("application_shutdown")
 
@@ -32,14 +43,24 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version="2.0.0",
         lifespan=lifespan,
+        docs_url=None if settings.disable_openapi else "/docs",
+        redoc_url=None if settings.disable_openapi else "/redoc",
+        openapi_url=None if settings.disable_openapi else "/openapi.json",
     )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Sync-Token"],
     )
+    app.add_middleware(
+        RateLimitMiddleware,
+        max_requests=settings.rate_limit_per_minute,
+        window_seconds=60,
+    )
+    app.add_middleware(SecurityHeadersMiddleware)
+
     prefix = settings.api_prefix
     app.include_router(auth.router, prefix=prefix)
     app.include_router(upload.router, prefix=prefix)
@@ -51,6 +72,8 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health():
+        if settings.is_production:
+            return {"status": "healthy"}
         return {"status": "healthy", "version": "2.0.0"}
 
     return app

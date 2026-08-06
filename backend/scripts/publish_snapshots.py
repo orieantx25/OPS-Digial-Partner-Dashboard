@@ -132,6 +132,40 @@ def _strip_clashes_list(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _payload_dict(payload: Any) -> Dict[str, Any]:
+    if isinstance(payload, dict):
+        return payload
+    if hasattr(payload, "model_dump"):
+        return payload.model_dump()
+    return {}
+
+
+def _strip_refund_cases(payload: Any) -> Dict[str, Any]:
+    """Leadership snapshots: counts only — no student PII in public JSON."""
+    data = _payload_dict(payload)
+    if not data:
+        return payload if isinstance(payload, dict) else {}
+    return {
+        "items": [],
+        "total": int(data.get("total") or 0),
+        "page": int(data.get("page") or 1),
+        "page_size": int(data.get("page_size") or 500),
+        "total_pages": int(data.get("total_pages") or 1),
+    }
+
+
+def _strip_block_payment_backtracking(payload: Any) -> Dict[str, Any]:
+    """Leadership snapshots: aggregate reconciliation — no lead-level rows."""
+    data = _payload_dict(payload)
+    if not data:
+        return payload if isinstance(payload, dict) else {}
+    return {
+        **data,
+        "rows": [],
+        "clash_rows": [],
+    }
+
+
 def _write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -215,8 +249,18 @@ def publish() -> Path:
             ("revenue", engine.get_revenue_dashboard(filters)),
             ("predictive", engine.get_predictive_analytics(filters)),
             ("campus_bifurcation", engine.get_campus_bifurcation(filters)),
-            ("refund_cases", engine.get_refund_cases(filters, page=1, page_size=500)),
-            ("block_payment_backtracking", engine.get_block_payment_backtracking(filters)),
+            (
+                "refund_cases",
+                _strip_refund_cases(
+                    engine.get_refund_cases(filters, page=1, page_size=500)
+                ),
+            ),
+            (
+                "block_payment_backtracking",
+                _strip_block_payment_backtracking(
+                    engine.get_block_payment_backtracking(filters)
+                ),
+            ),
             ("block_payment_attribution", engine.get_block_payment_attribution(filters)),
             ("alerts", engine.get_alerts(filters)),
             ("anomalies", engine.get_anomalies(filters)),

@@ -8,11 +8,15 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from app.api.dependencies import get_analytics_engine, parse_filters
-from app.domain.models import FilterParams
+from app.api.dependencies import get_analytics_engine, parse_filters, require_authenticated_user, require_write_access
+from app.domain.models import FilterParams, UserInfo
 from app.services.analytics_service import AnalyticsEngine
 
-router = APIRouter(prefix="/analytics", tags=["analytics"])
+router = APIRouter(
+    prefix="/analytics",
+    tags=["analytics"],
+    dependencies=[Depends(require_authenticated_user)],
+)
 
 
 @router.get("/stats")
@@ -237,6 +241,7 @@ async def export_data(
     filters: FilterParams = Depends(parse_filters),
     format: str = Query("csv", regex="^(csv|json)$"),
     engine: AnalyticsEngine = Depends(get_analytics_engine),
+    user: UserInfo = Depends(require_write_access),
 ):
     data = engine.export_data(filters)
     if format == "json":

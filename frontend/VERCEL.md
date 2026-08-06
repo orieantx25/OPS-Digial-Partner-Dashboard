@@ -22,6 +22,33 @@ Repo: connect **orieantx25/OPS-Digial-Partner-Dashboard**.
 
 ## After each local data refresh
 
+### One-click (dashboard Sync button)
+
+With `LEADERSHIP_AUTO_DEPLOY_ON_SYNC=true` in `backend/.env`, clicking **Sync** in the ops dashboard:
+
+1. Runs LSQ sync (leads, persona, refunds, block-paid flags)
+2. Publishes leadership snapshots (uses existing Metabase block CSV if you did not upload a new one)
+3. Commits and pushes `frontend/public/data/snapshots/` to `main` — Vercel redeploys automatically
+
+Start API **without** `--reload` during sync:
+
+```bash
+cd backend
+.venv\Scripts\uvicorn app.main:app --port 8000
+```
+
+Then use **Sync & deploy** in the filter bar (or `npm run dev` for the frontend).
+
+### CLI alternative
+
+```bash
+npm run sync:deploy
+```
+
+Use when auto-deploy is off, or for `--full` / `--no-push` from the terminal.
+
+### Manual steps
+
 ```bash
 npm run publish:snapshots
 git add frontend/public/data/snapshots

@@ -2,6 +2,8 @@
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
+from app.api.dependencies import require_authenticated_user, require_write_access
+from app.domain.models import UserInfo
 from app.logging_config import get_logger
 from app.services.block_payment_service import BlockPaymentService
 
@@ -16,6 +18,7 @@ def get_block_payment_service() -> BlockPaymentService:
 @router.get("/status")
 async def block_payment_status(
     service: BlockPaymentService = Depends(get_block_payment_service),
+    user: UserInfo = Depends(require_authenticated_user),
 ):
     return service.get_status()
 
@@ -24,6 +27,7 @@ async def block_payment_status(
 async def upload_block_payment_sheet(
     file: UploadFile = File(...),
     service: BlockPaymentService = Depends(get_block_payment_service),
+    user: UserInfo = Depends(require_write_access),
 ):
     if not file.filename:
         raise HTTPException(
@@ -49,7 +53,7 @@ async def upload_block_payment_sheet(
         result = service.upload_sheet(file.filename, content)
         logger.info(
             "block_payment_uploaded",
-            user="anonymous",
+            user=user.username,
             filename=file.filename,
             rows=result.get("row_count"),
         )

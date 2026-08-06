@@ -17,6 +17,7 @@ export function LeadSquaredSyncButton() {
   const [disableReason, setDisableReason] = useState<string>(
     'Checking LeadSquared configuration…'
   );
+  const [autoDeployLeadership, setAutoDeployLeadership] = useState(false);
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [lastFailure, setLastFailure] = useState<string | null>(null);
   const [step, setStep] = useState<SyncStep>('idle');
@@ -77,6 +78,7 @@ export function LeadSquaredSyncButton() {
           if (cfg.enabled) {
             setConfigState('ready');
             setDisableReason('');
+            setAutoDeployLeadership(Boolean(cfg.auto_deploy_leadership));
             refreshLastRun();
             return;
           }
@@ -119,13 +121,15 @@ export function LeadSquaredSyncButton() {
           setPercent(job.percent);
           if (job.status === 'completed') {
             setStep('done');
-            setSuccessMessage(job.message || 'Sync complete');
+            const msg = job.message || 'Sync complete';
+            setSuccessMessage(msg);
             bumpDataRefresh();
             refreshLastRun();
+            const delay = msg.includes('Vercel') || msg.includes('deploy') ? 12000 : 6000;
             setTimeout(() => {
               setStep('idle');
               setSuccessMessage(null);
-            }, 6000);
+            }, delay);
             return;
           }
           if (job.status === 'failed') {
@@ -206,9 +210,13 @@ export function LeadSquaredSyncButton() {
 
   const syncTitle =
     configState === 'ready'
-      ? lastRun
-        ? `Last sync: ${lastRun}`
-        : 'Pull latest leads from LeadSquared'
+      ? autoDeployLeadership
+        ? lastRun
+          ? `Last sync: ${lastRun}. Sync also publishes and deploys leadership dashboard.`
+          : 'Sync LSQ, publish snapshots, and deploy leadership dashboard to Vercel'
+        : lastRun
+          ? `Last sync: ${lastRun}`
+          : 'Pull latest leads from LeadSquared'
       : disableReason;
 
   return (
@@ -238,7 +246,11 @@ export function LeadSquaredSyncButton() {
             <CloudDownload className="h-3 w-3 shrink-0" />
           )}
           <span className="whitespace-nowrap">
-            {busy ? `Sync ${Math.round(percent)}%` : 'Sync'}
+            {busy
+              ? `Sync ${Math.round(percent)}%`
+              : autoDeployLeadership
+                ? 'Sync & deploy'
+                : 'Sync'}
           </span>
         </button>
         <div className="w-px self-stretch bg-border" aria-hidden />

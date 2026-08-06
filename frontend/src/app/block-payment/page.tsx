@@ -11,6 +11,7 @@ import { IndiaMap } from '@/components/charts/india-map';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { BlockPaymentTrackingRow } from '@/types';
 import { cn, formatNumber } from '@/lib/utils';
+import { isLeadershipMode } from '@/lib/static-mode';
 
 type UploadStep = 'idle' | 'uploading' | 'done' | 'error';
 
@@ -26,6 +27,7 @@ function isCounsellorPaymentSource(value: unknown): boolean {
 }
 
 export default function BlockPaymentPage() {
+  const leadership = isLeadershipMode();
   // No global filter bar on this page — always show full reconciliation set.
   const filters = useMemo(() => ({}), []);
 
@@ -311,6 +313,12 @@ export default function BlockPaymentPage() {
             ? 'Upload a block amount paid sheet above to reconcile payment source, campaign, and campus against block-paid leads in the main dataset.'
             : 'Reconciliation will appear once an admin uploads a block amount paid sheet.'}
         </p>
+      ) : leadership ? (
+        <p className="text-xs text-text-secondary panel p-3">
+          Snapshot: {formatNumber(matchedCount)} matched · {formatNumber(clashCount)} counsellor
+          clashes · {formatNumber(totalBlockPaid)} digital partner block-paid leads. Open the ops
+          dashboard for the searchable reconciliation list.
+        </p>
       ) : (
         <DataTable
           data={rows as BlockPaymentTrackingRow[]}
@@ -327,7 +335,7 @@ export default function BlockPaymentPage() {
             title="Partner Counsellor Clashes"
             subtitle="Partner-attributed block paid leads where payment source is Counsellor (from backtracking sheet)"
           />
-          {clashCount > 0 ? (
+          {clashCount > 0 && !leadership ? (
             <DataTable
               data={clashRows as BlockPaymentTrackingRow[]}
               columns={columns}
@@ -335,9 +343,14 @@ export default function BlockPaymentPage() {
               searchPlaceholder="Search clashes…"
               height={320}
             />
-          ) : (
+          ) : clashCount === 0 ? (
             <p className="text-text-secondary text-sm panel p-4">
               No partner counsellor clashes in the backtracking data.
+            </p>
+          ) : (
+            <p className="text-xs text-text-secondary panel p-3">
+              {formatNumber(clashCount)} counsellor clash(es) in snapshot. Open the ops dashboard for
+              row-level detail.
             </p>
           )}
         </>

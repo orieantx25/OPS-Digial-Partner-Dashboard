@@ -27,6 +27,13 @@ function getToken(): string | null {
   return localStorage.getItem('dp_token');
 }
 
+function getSyncToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  const fromEnv = process.env.NEXT_PUBLIC_SYNC_ADMIN_TOKEN?.trim();
+  if (fromEnv) return fromEnv;
+  return null;
+}
+
 function buildQuery(params: Record<string, unknown>): string {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -315,7 +322,12 @@ const liveApi = {
     request<Record<string, unknown>[]>('/upload/history'),
 
   getLsqSyncConfig: () =>
-    request<{ enabled: boolean; api_host: string; requires_token: boolean }>('/sync/config'),
+    request<{
+      enabled: boolean;
+      api_host: string;
+      requires_token: boolean;
+      auto_deploy_leadership?: boolean;
+    }>('/sync/config'),
 
   getLsqSyncLastRun: () =>
     request<{
@@ -330,11 +342,16 @@ const liveApi = {
       error?: string;
     }>('/sync/last-run'),
 
-  startLsqSync: (mode: 'incremental' | 'full' = 'incremental', fromDate?: string) =>
-    request<{ job_id: string; status: string; mode: string }>('/sync/leadsquared', {
+  startLsqSync: (mode: 'incremental' | 'full' = 'incremental', fromDate?: string) => {
+    const syncToken = getSyncToken();
+    const headers: Record<string, string> = {};
+    if (syncToken) headers['X-Sync-Token'] = syncToken;
+    return request<{ job_id: string; status: string; mode: string }>('/sync/leadsquared', {
       method: 'POST',
       body: JSON.stringify({ mode, from_date: fromDate ?? null }),
-    }),
+      headers,
+    });
+  },
 
   getLsqSyncStatus: (jobId: string) =>
     request<UploadJob>(`/sync/status/${jobId}`, { signal: AbortSignal.timeout(15000) }),

@@ -272,6 +272,8 @@ def empty_campus_bifurcation() -> Dict[str, Any]:
             },
         },
         "adjusted_sheet_campus_gender_charts": [],
+        "sheet_state_summary": [],
+        "adjusted_sheet_state_summary": [],
         "dp_refund_by_campus_chart": {
             "chart_id": "dp_refund_by_campus",
             "chart_type": "bar",

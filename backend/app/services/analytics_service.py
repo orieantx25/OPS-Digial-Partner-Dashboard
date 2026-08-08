@@ -2216,6 +2216,39 @@ class AnalyticsEngine:
             "campus_gender_charts": campus_gender_charts,
         }
 
+    def _block_sheet_state_summary(
+        self, refund_exclude: str = ""
+    ) -> List[Dict[str, Any]]:
+        """Block payment sheet counts by state (for Campus Block India map)."""
+        if not self.duck_repo.block_payment_exists():
+            return []
+        alias = "s" if refund_exclude else ""
+        table = f"{BLOCK_PAYMENT_TABLE} {alias}".strip()
+        state_expr = (
+            f"COALESCE(NULLIF(TRIM(CAST({alias + '.' if alias else ''}state AS VARCHAR)), ''), '(blank)')"
+        )
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT {state_expr} AS state, COUNT(*) AS leads
+            FROM {table}
+            WHERE 1=1 {refund_exclude}
+              AND {state_expr} <> '(blank)'
+            GROUP BY 1
+            ORDER BY leads DESC
+            """
+        )
+        return [
+            {
+                "state": str(r["state"]),
+                "leads": int(r["leads"] or 0),
+                "admissions": 0,
+                "block_amount_paid": int(r["leads"] or 0),
+                "stages": {"Block Amount Paid": int(r["leads"] or 0)},
+            }
+            for r in rows
+            if r.get("state")
+        ]
+
     def _refund_summary(self) -> Dict[str, int]:
         if not self.duck_repo.refund_exists():
             return {
@@ -3768,6 +3801,12 @@ class AnalyticsEngine:
 
         # Full payment sheet — all block amounts (not limited to digital-partner matches).
         refund_exclude = self._refund_exclude_sql("s")
+        sheet_state_summary = self._block_sheet_state_summary()
+        adjusted_sheet_state_summary = (
+            self._block_sheet_state_summary(refund_exclude)
+            if refund_exclude
+            else list(sheet_state_summary)
+        )
         sheet_detail_rows = self.duck_repo.query_dicts(
             f"""
             SELECT
@@ -4130,6 +4169,8 @@ class AnalyticsEngine:
             "adjusted_sheet_campus_gender_charts": adjusted_bundle.get(
                 "campus_gender_charts", []
             ),
+            "sheet_state_summary": sheet_state_summary,
+            "adjusted_sheet_state_summary": adjusted_sheet_state_summary,
             "dp_refund_by_campus_chart": dp_refund_by_campus_chart,
             "overall_refund_by_campus_chart": overall_refund_by_campus_chart,
         }

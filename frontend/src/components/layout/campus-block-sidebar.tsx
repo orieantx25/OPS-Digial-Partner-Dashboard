@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
-import { Building2, LayoutGrid } from 'lucide-react';
+import { Building2, LayoutGrid, Map } from 'lucide-react';
 import { useAppStore } from '@/store/app-store';
 import { cn } from '@/lib/utils';
 
@@ -12,6 +12,13 @@ const CAMPUS_NAV = [
     href: '/campus-block',
     label: 'Overall campus',
     icon: Building2,
+    exact: true,
+  },
+  {
+    href: '/campus-block/geography',
+    label: 'Geography',
+    icon: Map,
+    exact: false,
   },
 ] as const;
 
@@ -50,8 +57,9 @@ export function CampusBlockSidebar() {
           </div>
           {CAMPUS_NAV.map((item) => {
             const Icon = item.icon;
-            const active =
-              pathname === item.href || pathname.startsWith(`${item.href}/`);
+            const active = item.exact
+              ? pathname === item.href
+              : pathname === item.href || pathname.startsWith(`${item.href}/`);
             return (
               <Link
                 key={item.href}

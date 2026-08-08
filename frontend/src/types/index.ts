@@ -410,6 +410,10 @@ export interface CampusBifurcation {
   adjusted_sheet_campus_chart?: ChartData;
   adjusted_sheet_gender_chart?: ChartData;
   adjusted_sheet_campus_gender_charts?: CampusGenderChart[];
+  /** Gross block-payment sheet counts by state (sheet `state` column). */
+  sheet_state_summary?: StateSummary[];
+  /** Active (refund-excluded) sheet counts by state — preferred for Campus Block map. */
+  adjusted_sheet_state_summary?: StateSummary[];
   dp_refund_by_campus_chart?: ChartData;
   overall_refund_by_campus_chart?: ChartData;
 }

@@ -126,6 +126,7 @@ def test_campus_bifurcation_matched_only(temp_settings):
         "Email": ["a@test.com", "b@test.com"],
         "Phone": ["9999999991", "9999999992"],
         "Gender": ["Male", "Female"],
+        "State": ["Karnataka", "Maharashtra"],
         "SeatBlocking: CollegeCode": ["CAMP01", "CAMP02"],
         "SeatBlocking: CollegeName": ["Campus One", "Campus Two"],
         "Source at Payment": ["Partner", "Partner"],
@@ -184,3 +185,8 @@ def test_campus_bifurcation_matched_only(temp_settings):
     assert result["sheet_gender_chart"].chart_type == "donut"
     assert len(result["sheet_campus_gender_charts"]) == 2
     assert result["sheet_gender_chart"].extra.get("center_total") == 2
+
+    sheet_states = {r["state"]: r["leads"] for r in result["sheet_state_summary"]}
+    assert sheet_states.get("Karnataka") == 1
+    assert sheet_states.get("Maharashtra") == 1
+    assert len(result["adjusted_sheet_state_summary"]) == 2

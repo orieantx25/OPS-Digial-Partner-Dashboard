@@ -45,6 +45,9 @@ interface IndiaMapProps {
   height?: number;
   topLabels?: number;
   title?: string;
+  className?: string;
+  /** Fill for regions with zero / missing values. Default dark. Pass white for positive-only heatmaps. */
+  zeroAreaColor?: string;
 }
 
 export function IndiaMap({
@@ -54,6 +57,8 @@ export function IndiaMap({
   height = 480,
   topLabels = 5,
   title,
+  className,
+  zeroAreaColor = '#1A1A1A',
 }: IndiaMapProps) {
   const isMobile = useIsMobile();
   const resolvedHeight = isMobile ? Math.min(height, 280) : height;
@@ -91,7 +96,9 @@ export function IndiaMap({
   const { seriesData, max, minPositive } = useMemo(() => {
     type Item = {
       name: string;
-      value: number;
+      /** Positive counts only — zeros use null so visualMap does not tint them. */
+      value: number | null;
+      itemStyle?: { areaColor: string; borderColor?: string };
       label?: { show: boolean; formatter: string; color: string; fontSize: number; fontWeight: string };
     };
 
@@ -113,28 +120,31 @@ export function IndiaMap({
     const out: Item[] = [];
     let mx = 1;
     let minPos = Infinity;
-    if (geo) {
-      for (const f of geo.features) {
-        const region = f.properties?.NAME_1;
-        if (!region) continue;
-        const value = valueByRegion[region] ?? 0;
-        if (value > mx) mx = value;
-        if (value > 0 && value < minPos) minPos = value;
+    const regions = geo
+      ? geo.features.map((f) => f.properties?.NAME_1).filter(Boolean) as string[]
+      : Object.keys(valueByRegion);
+
+    for (const region of regions) {
+      const value = valueByRegion[region] ?? 0;
+      if (value > mx) mx = value;
+      if (value > 0 && value < minPos) minPos = value;
+      if (value > 0) {
         out.push({ name: region, value });
-      }
-    } else {
-      for (const [region, value] of Object.entries(valueByRegion)) {
-        if (value > mx) mx = value;
-        if (value > 0 && value < minPos) minPos = value;
-        out.push({ name: region, value });
+      } else {
+        // Explicit fill — visualMap outOfRange is unreliable for map series zeros.
+        out.push({
+          name: region,
+          value: null,
+          itemStyle: { areaColor: zeroAreaColor, borderColor: '#3A3A3A' },
+        });
       }
     }
 
     [...out]
+      .filter((item): item is Item & { value: number } => item.value != null && item.value > 0)
       .sort((a, b) => b.value - a.value)
       .slice(0, topLabels)
       .forEach((item) => {
-        if (item.value <= 0) return;
         item.label = {
           show: true,
           formatter: formatNumber(item.value),
@@ -149,7 +159,7 @@ export function IndiaMap({
       max: mx,
       minPositive: Number.isFinite(minPos) ? minPos : 1,
     };
-  }, [data, canonicalByLower, dimension, topLabels, geo]);
+  }, [data, canonicalByLower, dimension, topLabels, geo, zeroAreaColor]);
 
   const option = {
     backgroundColor: 'transparent',
@@ -158,10 +168,13 @@ export function IndiaMap({
       backgroundColor: '#202124',
       borderColor: '#3A3A3A',
       textStyle: { color: '#FFF' },
-      formatter: (p: { name: string; value?: number }) =>
-        `<strong>${p.name}</strong><br/>${dimensionLabel}: ${
-          formatNumber(Number.isFinite(p.value) ? p.value! : 0)
-        }`,
+      formatter: (p: { name: string; value?: number | null }) => {
+        const raw = p.value;
+        const n = raw == null || raw === ('' as unknown) || Number.isNaN(Number(raw))
+          ? 0
+          : Number(raw);
+        return `<strong>${p.name}</strong><br/>${dimensionLabel}: ${formatNumber(n)}`;
+      },
     },
     visualMap: {
       min: minPositive,
@@ -169,8 +182,9 @@ export function IndiaMap({
       left: 8,
       bottom: 8,
       calculable: true,
+      realtime: false,
       inRange: { color: ['#FFDADA', '#FFAAAA', '#F06666', '#D93030', '#8B1010'] },
-      outOfRange: { color: '#1A1A1A' },
+      outOfRange: { color: zeroAreaColor },
       textStyle: { color: '#B5B5B5' },
     },
     series: [
@@ -180,7 +194,11 @@ export function IndiaMap({
         nameProperty: 'NAME_1',
         roam: true,
         scaleLimit: { min: 1, max: 6 },
-        itemStyle: { areaColor: '#1A1A1A', borderColor: '#3A3A3A', borderWidth: 0.5 },
+        itemStyle: {
+          areaColor: zeroAreaColor,
+          borderColor: '#3A3A3A',
+          borderWidth: 0.5,
+        },
         emphasis: {
           itemStyle: { areaColor: '#E31E24' },
           label: { show: true, color: '#FFF' },
@@ -193,7 +211,7 @@ export function IndiaMap({
   };
 
   return (
-    <div className="panel p-3">
+    <div className={`panel p-3 ${className || ''}`.trim()}>
       {title && <div className="text-sm font-semibold text-text mb-2">{title}</div>}
       {!geo ? (
         <div
@@ -205,7 +223,7 @@ export function IndiaMap({
       ) : (
         <>
           <ReactECharts
-            key={dimension}
+            key={`${dimension}-${zeroAreaColor}`}
             option={option}
             style={{ height: resolvedHeight }}
             opts={{ renderer: 'canvas' }}

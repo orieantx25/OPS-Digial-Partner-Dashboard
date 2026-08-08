@@ -226,29 +226,24 @@ export default function RefundCasesPage() {
             </div>
           </section>
 
-          {leadership ? (
-            <p className="text-xs text-text-secondary panel p-3">
-              Snapshot: {formatNumber(sheetStatus?.row_count ?? campus.refund_summary?.total_cases ?? 0)}{' '}
-              cases · {sheetStatus?.source_filename ?? 'refund sheet'} · updated{' '}
-              {sheetStatus?.uploaded_at ?? '—'}. Case-level rows are available on the ops dashboard.
-            </p>
-          ) : casesLoading && !cases ? (
-            <p className="text-text-secondary text-sm">Loading cases…</p>
-          ) : (
-            <section className="space-y-3 panel p-4 sm:p-5 border border-border">
-              <SectionHeader
-                title="Refund cases"
-                subtitle={`${formatNumber(sheetStatus?.row_count ?? cases?.total ?? rows.length)} total cases in sheet`}
-              />
-              <DataTable
-                data={rows}
-                columns={columns}
-                exportFilename="refund_cases.csv"
-                searchPlaceholder="Search student, email, UTR, status…"
-                height="auto"
-              />
-            </section>
-          )}
+          {!leadership &&
+            (casesLoading && !cases ? (
+              <p className="text-text-secondary text-sm">Loading cases…</p>
+            ) : (
+              <section className="space-y-3 panel p-4 sm:p-5 border border-border">
+                <SectionHeader
+                  title="Refund cases"
+                  subtitle={`${formatNumber(sheetStatus?.row_count ?? cases?.total ?? rows.length)} total cases in sheet`}
+                />
+                <DataTable
+                  data={rows}
+                  columns={columns}
+                  exportFilename="refund_cases.csv"
+                  searchPlaceholder="Search student, email, UTR, status…"
+                  height="auto"
+                />
+              </section>
+            ))}
         </>
       ) : null}
     </div>

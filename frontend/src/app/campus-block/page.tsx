@@ -133,8 +133,6 @@ export default function CampusBlockPage() {
         </div>
       ) : data?.has_sheet ? (
         <>
-          <CampusBlockKpiDashboard data={data} />
-
           <section className="space-y-4 panel p-4 sm:p-5 border border-border">
             <SectionHeader
               title="Block distribution"
@@ -152,24 +150,26 @@ export default function CampusBlockPage() {
                 )}
               </div>
             </div>
-
-            {adjustedCampusGenderCharts.length > 0 && (
-              <div className="pt-3 border-t border-border">
-                <p className="text-[10px] uppercase tracking-widest text-text-secondary mb-3 px-1">
-                  Gender split by campus
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {adjustedCampusGenderCharts.map((item) => (
-                    <ChartPanel
-                      key={`adj-${item.campus_code}`}
-                      chart={item.gender_chart}
-                      height={chartSm - 16}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
           </section>
+
+          <CampusBlockKpiDashboard data={data} />
+
+          {adjustedCampusGenderCharts.length > 0 && (
+            <section className="space-y-3 panel p-4 sm:p-5 border border-border">
+              <p className="text-[10px] uppercase tracking-widest text-text-secondary mb-1 px-1">
+                Gender split by campus
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {adjustedCampusGenderCharts.map((item) => (
+                  <ChartPanel
+                    key={`adj-${item.campus_code}`}
+                    chart={item.gender_chart}
+                    height={chartSm - 16}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
 
           <section className="space-y-3 panel p-4 sm:p-5 border border-border">
             <SectionHeader

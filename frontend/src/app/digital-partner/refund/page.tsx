@@ -222,15 +222,6 @@ export default function RefundPage() {
 
       <RefundKpiRows campus={campus} caseRows={rows} />
 
-      {leadership && sheetStatus?.has_data && (
-        <p className="text-xs text-text-secondary panel p-3">
-          Snapshot: {formatNumber(sheetStatus.row_count)} cases ·{' '}
-          {sheetStatus.source_filename ?? 'refund sheet'} · updated{' '}
-          {sheetStatus.uploaded_at ?? '—'}. Open the ops dashboard for the searchable case
-          list.
-        </p>
-      )}
-
       {!leadership && loading && !cases ? (
         <p className="text-text-secondary text-sm">Loading...</p>
       ) : !leadership ? (

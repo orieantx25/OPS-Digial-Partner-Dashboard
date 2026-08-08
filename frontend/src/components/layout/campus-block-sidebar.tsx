@@ -74,7 +74,6 @@ export function CampusBlockSidebar() {
         <div className="p-3 border-t border-border">
           <div className="px-1 text-xs text-text-secondary">
             <div className="text-text truncate">{user.username}</div>
-            <div className="uppercase tracking-wide">{user.role}</div>
           </div>
         </div>
       )}

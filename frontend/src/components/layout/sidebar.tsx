@@ -86,8 +86,7 @@ export function Sidebar() {
         )}
         {user && (
           <div className="px-1 text-xs text-text-secondary">
-            <div className="text-text">{user.username}</div>
-            <div className="uppercase tracking-wide">{user.role}</div>
+            <div className="text-text truncate">{user.username}</div>
           </div>
         )}
       </div>

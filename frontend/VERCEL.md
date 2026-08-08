@@ -16,11 +16,14 @@ Repo: connect **orieantx25/OPS-Digial-Partner-Dashboard**.
 | `NEXT_PUBLIC_ENABLE_UPLOAD` | `false` |
 | `NEXT_PUBLIC_ENABLE_LSQ_SYNC` | `false` |
 | `NEXT_PUBLIC_AUTO_LOGIN` | `false` |
-| `NEXT_PUBLIC_PORTAL_AUTH` | `true` |
-| `PORTAL_AUTH_SECRET` | long random string |
+| `NEXT_PUBLIC_PORTAL_AUTH` | `true` (**required** for login + hub gating) |
+| `PORTAL_AUTH_SECRET` | long random string (must match loan-ops if using handoff) |
 | `ALLOWED_EMAIL_HASHES_B64` | base64-encoded bcrypt hashes (see below) |
+| `PORTAL_ADMIN_EMAILS` | optional comma-separated admin emails |
 | `PORTAL_LOGIN_URL` | `https://your-app.vercel.app/login` |
 | `NEXT_PUBLIC_LOAN_OPS_URL` | `https://loan-ops.vercel.app` |
+
+Without `NEXT_PUBLIC_PORTAL_AUTH=true`, production skips `/login`, does not gate pages, and older deploys may hide the Report hub link. After changing env vars, **Redeploy** so `NEXT_PUBLIC_*` values are baked into the build.
 
 Paste the `ALLOWED_EMAIL_HASHES_B64` line into Vercel. Do not use raw `ALLOWED_EMAIL_HASHES` — `$` in bcrypt breaks env loading.
 

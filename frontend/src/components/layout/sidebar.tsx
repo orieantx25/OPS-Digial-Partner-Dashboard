@@ -5,7 +5,6 @@ import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { LayoutGrid, Upload } from 'lucide-react';
 import { canUpload } from '@/hooks/use-auth-bootstrap';
-import { isPortalAuthEnabled } from '@/lib/portal-mode';
 import { cn } from '@/lib/utils';
 import { NAV_GROUPS, NAV_ICONS, NAV_PAGES } from '@/lib/nav';
 import { useAppStore } from '@/store/app-store';
@@ -32,17 +31,15 @@ export function Sidebar() {
         </div>
       </div>
       <nav className="flex-1 overflow-y-auto py-2">
-        {isPortalAuthEnabled() && (
-          <div className="mb-2 px-4">
-            <Link
-              href="/"
-              className="flex items-center gap-2.5 py-2 text-sm text-text-secondary hover:text-text border-l-2 border-l-transparent hover:bg-panel/50 pl-2"
-            >
-              <LayoutGrid className="w-4 h-4 shrink-0" />
-              <span>Report hub</span>
-            </Link>
-          </div>
-        )}
+        <div className="mb-2 px-4">
+          <Link
+            href="/"
+            className="flex items-center gap-2.5 py-2 text-sm text-text-secondary hover:text-text border-l-2 border-l-transparent hover:bg-panel/50 pl-2"
+          >
+            <LayoutGrid className="w-4 h-4 shrink-0" />
+            <span>Report hub</span>
+          </Link>
+        </div>
         {NAV_GROUPS.map((group) => {
           const pages = NAV_PAGES.filter((p) => p.group === group);
           if (!pages.length) return null;

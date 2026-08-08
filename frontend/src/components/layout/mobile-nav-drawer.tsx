@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
-import { X, Upload } from 'lucide-react';
+import { LayoutGrid, Upload, X } from 'lucide-react';
 import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { cn } from '@/lib/utils';
 import { MOBILE_INSIGHT_LINKS, NAV_GROUPS, NAV_ICONS, NAV_PAGES } from '@/lib/nav';
@@ -77,6 +77,16 @@ export function MobileNavDrawer() {
         </div>
 
         <nav className="flex-1 overflow-y-auto py-2">
+          <div className="mb-3 px-4">
+            <Link
+              href="/"
+              onClick={closeDrawer}
+              className="flex items-center gap-3 px-3 py-2.5 text-sm rounded-md min-h-[44px] text-text-secondary active:bg-panel/50"
+            >
+              <LayoutGrid className="w-5 h-5 shrink-0" />
+              <span className="leading-snug">Report hub</span>
+            </Link>
+          </div>
           <div className="mb-3 px-4">
             <div className="text-[10px] uppercase tracking-widest text-text-secondary mb-2">
               Block & refunds

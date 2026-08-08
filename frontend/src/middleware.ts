@@ -12,8 +12,18 @@ function isPublicPath(pathname: string): boolean {
   if (pathname === '/login') return true;
   if (pathname.startsWith('/_next')) return true;
   if (pathname === '/favicon.ico' || pathname === '/robots.txt') return true;
+  if (pathname.startsWith('/logo')) return true;
   if (pathname === '/api/auth/login') return true;
+  // Static marketing/brand assets under public/
+  if (/\.(png|jpg|jpeg|gif|webp|svg|ico|txt|xml)$/i.test(pathname)) return true;
   return false;
+}
+
+async function readPortalToken(request: NextRequest): Promise<string | null> {
+  const cookie = request.cookies.get(PORTAL_TOKEN_COOKIE)?.value;
+  const header = request.headers.get('authorization');
+  const bearer = header?.startsWith('Bearer ') ? header.slice(7).trim() : null;
+  return cookie || bearer || null;
 }
 
 export async function middleware(request: NextRequest) {
@@ -28,44 +38,22 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  if (PORTAL_AUTH) {
-    const needsSnapshotAuth =
-      pathname.startsWith('/data/snapshots') || pathname.startsWith('/api/snapshots');
+  if (PORTAL_AUTH && !isPublicPath(pathname)) {
+    const token = await readPortalToken(request);
+    const session = token ? await verifyPortalToken(token) : null;
 
-    if (needsSnapshotAuth) {
-      const cookie = request.cookies.get(PORTAL_TOKEN_COOKIE)?.value;
-      const header = request.headers.get('authorization');
-      const bearer = header?.startsWith('Bearer ') ? header.slice(7).trim() : null;
-      const token = cookie || bearer;
-      if (!token) {
-        return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 });
-      }
-      const session = await verifyPortalToken(token);
-      if (!session) {
-        return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 });
-      }
-    }
-
-    if (
-      pathname.startsWith('/api/auth/handoff') ||
-      pathname.startsWith('/api/auth/me') ||
-      pathname.startsWith('/api/snapshots')
-    ) {
-      if (pathname.startsWith('/api/auth/login')) {
-        return NextResponse.next();
-      }
-      const cookie = request.cookies.get(PORTAL_TOKEN_COOKIE)?.value;
-      const header = request.headers.get('authorization');
-      const bearer = header?.startsWith('Bearer ') ? header.slice(7).trim() : null;
-      const token = cookie || bearer;
-      if (!token && !pathname.startsWith('/api/auth/login')) {
+    if (!session) {
+      if (pathname.startsWith('/api/')) {
         if (pathname.startsWith('/api/auth/me') && request.method === 'GET') {
           return NextResponse.json({ detail: 'Not authenticated' }, { status: 401 });
         }
-        if (pathname.startsWith('/api/auth/handoff') || pathname.startsWith('/api/snapshots')) {
-          return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 });
-        }
+        return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 });
       }
+      const loginUrl = request.nextUrl.clone();
+      loginUrl.pathname = '/login';
+      loginUrl.search = '';
+      loginUrl.searchParams.set('return', pathname);
+      return NextResponse.redirect(loginUrl);
     }
   }
 
@@ -81,8 +69,10 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/data/snapshots/:path*',
-    '/api/snapshots/:path*',
-    '/api/auth/:path*',
+    /*
+     * Protect app routes when portal auth is on; also cover snapshot APIs.
+     * Skip Next internals and common static files.
+     */
+    '/((?!_next/static|_next/image|favicon.ico).*)',
   ],
 };

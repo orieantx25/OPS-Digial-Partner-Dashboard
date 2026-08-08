@@ -7,7 +7,6 @@ import { useState } from 'react';
 import { RefundCasesSidebar } from '@/components/layout/refund-cases-sidebar';
 import { PublishedDataBanner } from '@/components/dashboard/published-data-banner';
 import { useAuthBootstrap } from '@/hooks/use-auth-bootstrap';
-import { isPortalAuthEnabled } from '@/lib/portal-mode';
 import { cn } from '@/lib/utils';
 
 export function RefundCasesShell({ children }: { children: React.ReactNode }) {
@@ -79,16 +78,14 @@ export function RefundCasesShell({ children }: { children: React.ReactNode }) {
                 <X className="h-5 w-5" />
               </button>
             </div>
-            {isPortalAuthEnabled() && (
-              <Link
-                href="/"
-                onClick={() => setDrawerOpen(false)}
-                className="flex items-center gap-2.5 py-2.5 px-2 text-sm text-text-secondary hover:text-text"
-              >
-                <LayoutGrid className="w-4 h-4" />
-                Report hub
-              </Link>
-            )}
+            <Link
+              href="/"
+              onClick={() => setDrawerOpen(false)}
+              className="flex items-center gap-2.5 py-2.5 px-2 text-sm text-text-secondary hover:text-text"
+            >
+              <LayoutGrid className="w-4 h-4" />
+              Report hub
+            </Link>
             <Link
               href="/refund-cases"
               onClick={() => setDrawerOpen(false)}

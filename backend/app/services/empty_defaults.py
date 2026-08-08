@@ -232,11 +232,15 @@ def empty_campus_bifurcation() -> Dict[str, Any]:
         },
         "refund_summary": {
             "total_cases": 0,
+            "retained_cases": 0,
+            "refunded_cases": 0,
             "refund_cases": 0,
             "refund_processed": 0,
             "digital_partner_refund_cases": 0,
             "by_campus": {"SSAHE": 0, "ADYPU": 0},
             "refunds_applied_by_campus": {"SSAHE": 0, "ADYPU": 0},
+            "retained_by_campus": {"SSAHE": 0, "ADYPU": 0},
+            "refunded_by_campus": {"SSAHE": 0, "ADYPU": 0},
             "dp_refund_requests": {
                 "total": 0,
                 "by_campus": {"SSAHE": 0, "ADYPU": 0},

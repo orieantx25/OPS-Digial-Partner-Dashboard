@@ -46,6 +46,10 @@ NEXT_PUBLIC_AUTO_LOGIN=false
 
 Do **not** set `NEXT_PUBLIC_API_URL` in this mode (API rewrites are disabled).
 
+### Reports portal (email login)
+
+When `NEXT_PUBLIC_PORTAL_AUTH=true`, the production URL shows a login screen then a hub with three dashboards: Digital Partner (`/digital-partner`), Campus Block (`/campus-block`), and Loan Operations (handoff to loan-ops). See [`frontend/VERCEL.md`](frontend/VERCEL.md) and [`docs/LOAN_OPS_PORTAL_AUTH.md`](LOAN_OPS_PORTAL_AUTH.md).
+
 Security: see [`docs/SECURITY.md`](SECURITY.md). Use Vercel Deployment Protection on the leadership URL.
 
 ### What leadership can / cannot do

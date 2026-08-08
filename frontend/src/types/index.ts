@@ -180,20 +180,20 @@ export interface FilterOptions {
 }
 
 export const DASHBOARD_PAGES = [
-  { id: 'executive', label: 'Overview', href: '/', group: 'Pipeline' },
-  { id: 'funnel', label: 'Lead Funnel', href: '/funnel', group: 'Pipeline' },
-  { id: 'partner', label: 'Partner Analytics', href: '/partner', group: 'Pipeline' },
-  { id: 'contactability', label: 'Contactability', href: '/contactability', group: 'Ops' },
-  { id: 'ai-calling', label: 'AI Calling', href: '/ai-calling', group: 'Ops' },
-  { id: 'persona', label: 'Persona', href: '/persona', group: 'Ops' },
-  { id: 'campaign', label: 'Campaign', href: '/campaign', group: 'Ops' },
-  { id: 'geographic', label: 'Geographic', href: '/geographic', group: 'Ops' },
-  { id: 'block-payment', label: 'Block Payment', href: '/block-payment', group: 'Ops' },
-  { id: 'refund', label: 'Refunds', href: '/refund', group: 'Ops' },
-  { id: 'campus', label: 'Campus', href: '/campus', group: 'Ops' },
-  { id: 'revenue', label: 'ROI', href: '/revenue', group: 'Forecast' },
-  { id: 'predictive', label: 'Predictive', href: '/predictive', group: 'Forecast' },
-  { id: 'upload', label: 'Upload Data', href: '/upload', group: 'Ops' },
+  { id: 'executive', label: 'Overview', href: '/digital-partner', group: 'Pipeline' },
+  { id: 'funnel', label: 'Lead Funnel', href: '/digital-partner/funnel', group: 'Pipeline' },
+  { id: 'partner', label: 'Partner Analytics', href: '/digital-partner/partner', group: 'Pipeline' },
+  { id: 'contactability', label: 'Contactability', href: '/digital-partner/contactability', group: 'Ops' },
+  { id: 'ai-calling', label: 'AI Calling', href: '/digital-partner/ai-calling', group: 'Ops' },
+  { id: 'persona', label: 'Persona', href: '/digital-partner/persona', group: 'Ops' },
+  { id: 'campaign', label: 'Campaign', href: '/digital-partner/campaign', group: 'Ops' },
+  { id: 'geographic', label: 'Geographic', href: '/digital-partner/geographic', group: 'Ops' },
+  { id: 'block-payment', label: 'Block Payment', href: '/digital-partner/block-payment', group: 'Ops' },
+  { id: 'refund', label: 'Refunds', href: '/digital-partner/refund', group: 'Ops' },
+  { id: 'campus', label: 'Campus', href: '/digital-partner/campus', group: 'Ops' },
+  { id: 'revenue', label: 'ROI', href: '/digital-partner/revenue', group: 'Forecast' },
+  { id: 'predictive', label: 'Predictive', href: '/digital-partner/predictive', group: 'Forecast' },
+  { id: 'upload', label: 'Upload Data', href: '/digital-partner/upload', group: 'Ops' },
 ] as const;
 
 export const NAV_GROUPS = ['Pipeline', 'Ops', 'Forecast'] as const;
@@ -306,6 +306,20 @@ export interface BlockPaymentSheetStatus {
   row_count: number;
   source_filename?: string | null;
   uploaded_at?: string | null;
+  campus_fill_filename?: string | null;
+  campus_fill_uploaded_at?: string | null;
+  campus_fill_updated_count?: number;
+  blank_campus_count?: number;
+}
+
+export interface BlankCampusRow {
+  sheet_id?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  full_name?: string | null;
+  gender?: string | null;
+  college_code?: string | null;
+  college_name?: string | null;
 }
 
 export interface CampusGenderRow {
@@ -408,11 +422,15 @@ export interface DpRefundRequestsSummary {
 
 export interface RefundSummary {
   total_cases: number;
+  retained_cases?: number;
+  refunded_cases?: number;
   refund_cases: number;
   refund_processed?: number;
   digital_partner_refund_cases: number;
   by_campus?: { SSAHE?: number; ADYPU?: number };
   refunds_applied_by_campus?: { SSAHE?: number; ADYPU?: number };
+  retained_by_campus?: { SSAHE?: number; ADYPU?: number };
+  refunded_by_campus?: { SSAHE?: number; ADYPU?: number };
   dp_refund_requests?: DpRefundRequestsSummary;
 }
 

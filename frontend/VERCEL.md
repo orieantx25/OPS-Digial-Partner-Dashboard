@@ -16,6 +16,20 @@ Repo: connect **orieantx25/OPS-Digial-Partner-Dashboard**.
 | `NEXT_PUBLIC_ENABLE_UPLOAD` | `false` |
 | `NEXT_PUBLIC_ENABLE_LSQ_SYNC` | `false` |
 | `NEXT_PUBLIC_AUTO_LOGIN` | `false` |
+| `NEXT_PUBLIC_PORTAL_AUTH` | `true` |
+| `PORTAL_AUTH_SECRET` | long random string |
+| `ALLOWED_EMAIL_HASHES_B64` | base64-encoded bcrypt hashes (see below) |
+| `PORTAL_LOGIN_URL` | `https://your-app.vercel.app/login` |
+| `NEXT_PUBLIC_LOAN_OPS_URL` | `https://loan-ops.vercel.app` |
+
+Paste the `ALLOWED_EMAIL_HASHES_B64` line into Vercel. Do not use raw `ALLOWED_EMAIL_HASHES` — `$` in bcrypt breaks env loading.
+
+```bash
+cd frontend
+node scripts/hash-allowlist-emails.mjs user1@example.com user2@example.com
+```
+
+Loan-ops handoff: see [`docs/LOAN_OPS_PORTAL_AUTH.md`](../../docs/LOAN_OPS_PORTAL_AUTH.md).
 
 5. Do **not** add `NEXT_PUBLIC_API_URL`.
 6. Click **Deploy**.

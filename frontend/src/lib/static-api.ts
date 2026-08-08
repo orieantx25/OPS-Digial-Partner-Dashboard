@@ -161,6 +161,12 @@ export const staticApi = {
     throw new Error('Upload is not available on the leadership dashboard');
   },
 
+  getBlankCampusRows: async () => ({ items: [], total: 0 }),
+
+  uploadCampusFillSheet: async () => {
+    throw new Error('Upload is not available on the leadership dashboard');
+  },
+
   uploadRefundSheet: async () => {
     throw new Error('Upload is not available on the leadership dashboard');
   },

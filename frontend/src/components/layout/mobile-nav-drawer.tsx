@@ -118,7 +118,7 @@ export function MobileNavDrawer() {
                   const Icon = NAV_ICONS[page.id] || NAV_ICONS.executive;
                   const active =
                     pathname === page.href ||
-                    (page.href !== '/' && pathname.startsWith(page.href));
+                    (page.href !== '/digital-partner' && pathname.startsWith(page.href));
                   return (
                     <Link
                       key={page.id}

@@ -7,9 +7,11 @@ export type KpiItem = {
   value: number | string;
   sub?: string;
   primary?: boolean;
+  /** Tailwind class for the value number (overrides primary/default). */
+  valueClassName?: string;
 };
 
-export function KpiBlock({ label, value, sub, primary }: KpiItem) {
+export function KpiBlock({ label, value, sub, primary, valueClassName }: KpiItem) {
   return (
     <div
       className={cn(
@@ -23,7 +25,7 @@ export function KpiBlock({ label, value, sub, primary }: KpiItem) {
       <div
         className={cn(
           'text-base sm:text-lg font-semibold kpi-value mt-1 tabular-nums',
-          primary ? 'text-primary' : 'text-text'
+          valueClassName ?? (primary ? 'text-primary' : 'text-text')
         )}
       >
         {typeof value === 'number' ? formatNumber(value) : value}

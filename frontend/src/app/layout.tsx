@@ -1,10 +1,10 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
-import { AppShell } from '@/components/layout/app-shell';
+import { PortalAuthProvider } from '@/components/auth/portal-auth-provider';
 
 export const metadata: Metadata = {
-  title: 'Digital Partner Analytics',
-  description: 'Enterprise Analytics Platform for upGrad School of Technology',
+  title: 'uGSOT Report Hub',
+  description: 'Analytics and operations reports for upGrad School of Technology',
 };
 
 export const viewport: Viewport = {
@@ -18,7 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <AppShell>{children}</AppShell>
+        <PortalAuthProvider>{children}</PortalAuthProvider>
       </body>
     </html>
   );

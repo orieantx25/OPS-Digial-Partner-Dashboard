@@ -2,22 +2,64 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { isPortalAuthEnabled } from '@/lib/portal-mode';
 import { isStaticDataMode } from '@/lib/static-mode';
+import { usePortalAuthStore } from '@/store/portal-auth-store';
 import { useAppStore } from '@/store/app-store';
 import { UserInfo } from '@/types';
 
-const AUTO_LOGIN = process.env.NEXT_PUBLIC_AUTO_LOGIN !== 'false';
+const AUTO_LOGIN =
+  !isPortalAuthEnabled() && process.env.NEXT_PUBLIC_AUTO_LOGIN !== 'false';
 const DEFAULT_USER = process.env.NEXT_PUBLIC_DEFAULT_USER || 'ops';
 const DEFAULT_PASSWORD = process.env.NEXT_PUBLIC_DEFAULT_PASSWORD || 'ops123';
 
 export function useAuthBootstrap(): boolean {
   const [ready, setReady] = useState(false);
   const setUser = useAppStore((s) => s.setUser);
+  const portalEmail = usePortalAuthStore((s) => s.email);
+  const portalAdmin = usePortalAuthStore((s) => s.isAdmin);
+  const portalReady = usePortalAuthStore((s) => s.ready);
 
   useEffect(() => {
+    if (isPortalAuthEnabled() && !portalReady) return;
+
     let active = true;
 
     async function bootstrap() {
+      if (isPortalAuthEnabled()) {
+        if (portalEmail) {
+          const portalRole = portalAdmin ? 'admin' : 'read_only';
+          if (!isStaticDataMode()) {
+            try {
+              const { access_token, user } = await api.login(DEFAULT_USER, DEFAULT_PASSWORD);
+              if (active) {
+                setUser(
+                  {
+                    ...(user as UserInfo),
+                    username: portalEmail,
+                    id: portalEmail,
+                    role: portalAdmin ? 'admin' : (user as UserInfo).role,
+                  },
+                  access_token
+                );
+              }
+              return;
+            } catch {
+              localStorage.removeItem('dp_token');
+            }
+          }
+          if (active) {
+            setUser(
+              { id: portalEmail, username: portalEmail, role: portalRole },
+              usePortalAuthStore.getState().memoryToken ?? 'portal'
+            );
+          }
+        } else if (active) {
+          setUser(null, null);
+        }
+        return;
+      }
+
       if (isStaticDataMode()) {
         if (active) {
           setUser(
@@ -44,7 +86,7 @@ export function useAuthBootstrap(): boolean {
           const { access_token, user } = await api.login(DEFAULT_USER, DEFAULT_PASSWORD);
           if (active) setUser(user as UserInfo, access_token);
         } catch {
-          // Backend unavailable — app still loads in read-only mode
+          /* Backend unavailable */
         }
       }
     }
@@ -56,7 +98,11 @@ export function useAuthBootstrap(): boolean {
     return () => {
       active = false;
     };
-  }, [setUser]);
+  }, [portalAdmin, portalEmail, portalReady, setUser]);
+
+  if (isPortalAuthEnabled() && !portalReady) {
+    return false;
+  }
 
   return ready;
 }
@@ -71,8 +117,17 @@ export async function loginUser(username: string, password: string): Promise<boo
   }
 }
 
-/** Default on locally; set NEXT_PUBLIC_ENABLE_UPLOAD=false on the public (Vercel) build. */
+/**
+ * Upload / sheet-refresh UI.
+ * - Static leadership builds: always off (no backend).
+ * - Portal auth: only emails in PORTAL_ADMIN_EMAILS.
+ * - Local ops (no portal): on unless NEXT_PUBLIC_ENABLE_UPLOAD=false.
+ */
 export function canUpload(): boolean {
   if (isStaticDataMode()) return false;
-  return process.env.NEXT_PUBLIC_ENABLE_UPLOAD !== 'false';
+  if (process.env.NEXT_PUBLIC_ENABLE_UPLOAD === 'false') return false;
+  if (isPortalAuthEnabled()) {
+    return usePortalAuthStore.getState().isAdmin;
+  }
+  return true;
 }

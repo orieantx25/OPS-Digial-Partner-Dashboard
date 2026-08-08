@@ -20,7 +20,6 @@ export function BlockRefundKpiStrip({
   dpRefundOverlap,
   className = 'max-w-5xl',
 }: BlockRefundKpiStripProps) {
-  const removed = Math.max(0, grossBlock - activeBlock);
   const showUnassigned = unassignedCount > 0;
   const showDpOverlap = typeof dpRefundOverlap === 'number';
 
@@ -36,14 +35,9 @@ export function BlockRefundKpiStrip({
         <div className="text-[10px] uppercase tracking-widest text-text-secondary">
           Active block
         </div>
-        <div className="text-lg font-semibold text-primary kpi-value mt-1">
+        <div className="text-lg font-semibold text-green-500 kpi-value mt-1">
           {formatNumber(activeBlock)}
         </div>
-        {removed > 0 && (
-          <div className="text-[10px] text-text-secondary mt-0.5">
-            {formatNumber(removed)} removed from sheet
-          </div>
-        )}
       </div>
       <div className="bg-surface px-4 py-3">
         <div className="text-[10px] uppercase tracking-widest text-text-secondary">
@@ -57,7 +51,7 @@ export function BlockRefundKpiStrip({
         <div className="text-[10px] uppercase tracking-widest text-text-secondary">
           Refunds applied
         </div>
-        <div className="text-lg font-semibold text-text kpi-value mt-1">
+        <div className="text-lg font-semibold text-white kpi-value mt-1">
           {formatNumber(refundsApplied)}
         </div>
       </div>

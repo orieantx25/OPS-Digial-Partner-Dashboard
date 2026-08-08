@@ -2070,15 +2070,41 @@ class AnalyticsEngine:
         escaped = [p.replace("'", "''") for p in PARTNER_CANONICAL]
         return ", ".join(f"'{p}'" for p in escaped)
 
+    def _refund_on_hold_sql(self, alias: str = "r") -> str:
+        """True when final status is On hold as per SST team (not refund applied)."""
+        status = f"LOWER(TRIM(COALESCE({alias}.final_status, '')))"
+        return f"({status} LIKE '%on hold%' AND {status} LIKE '%sst%')"
+
+    def _refund_refunded_status_sql(self, alias: str = "r") -> str:
+        """Final status is Refunded (excludes Sent to Uni / Processed)."""
+        status = f"LOWER(TRIM(COALESCE({alias}.final_status, '')))"
+        return (
+            f"({status} = 'refunded' OR "
+            f"({status} LIKE '%refunded%' AND {status} NOT LIKE '%processed%'))"
+        )
+
+    def _refund_processed_status_sql(self, alias: str = "r") -> str:
+        """Final status is Sent to Uni (also matches legacy Processed labels)."""
+        status = f"LOWER(TRIM(COALESCE({alias}.final_status, '')))"
+        return (
+            f"({status} = 'processed' OR {status} LIKE '%processed%' "
+            f"OR {status} LIKE '%sent to uni%')"
+        )
+
+    def _refund_applied_sql(self, alias: str = "r") -> str:
+        """Refund applied = marked is_refund and not on-hold SST."""
+        return f"({alias}.is_refund AND NOT {self._refund_on_hold_sql(alias)})"
+
     def _refund_exclude_sql(self, table_alias: str) -> str:
-        """Exclude block-payment rows that match any is_refund refund record."""
+        """Exclude block-payment rows that match any applied refund record."""
         if not self.duck_repo.refund_exists():
             return ""
         prefix = f"{table_alias}."
+        applied = self._refund_applied_sql("r")
         return f"""
             AND NOT EXISTS (
                 SELECT 1 FROM {REFUND_TABLE} r
-                WHERE r.is_refund
+                WHERE {applied}
                   AND (
                     (r.match_email IS NOT NULL AND {prefix}match_email IS NOT NULL
                      AND r.match_email = {prefix}match_email)
@@ -2194,11 +2220,15 @@ class AnalyticsEngine:
         if not self.duck_repo.refund_exists():
             return {
                 "total_cases": 0,
+                "retained_cases": 0,
+                "refunded_cases": 0,
                 "refund_cases": 0,
                 "refund_processed": 0,
                 "digital_partner_refund_cases": 0,
                 "by_campus": {"SSAHE": 0, "ADYPU": 0},
                 "refunds_applied_by_campus": {"SSAHE": 0, "ADYPU": 0},
+                "retained_by_campus": {"SSAHE": 0, "ADYPU": 0},
+                "refunded_by_campus": {"SSAHE": 0, "ADYPU": 0},
                 "dp_refund_requests": {
                     "total": 0,
                     "by_campus": {"SSAHE": 0, "ADYPU": 0},
@@ -2206,13 +2236,19 @@ class AnalyticsEngine:
                 },
             }
         partners = self._canonical_partner_sql_list()
+        on_hold = self._refund_on_hold_sql("r")
+        refunded = self._refund_refunded_status_sql("r")
+        processed = self._refund_processed_status_sql("r")
+        applied = self._refund_applied_sql("r")
         rows = self.duck_repo.query_dicts(
             f"""
             SELECT
                 COUNT(*) AS total_cases,
-                SUM(CASE WHEN r.is_refund THEN 1 ELSE 0 END) AS refund_cases,
+                SUM(CASE WHEN {on_hold} THEN 1 ELSE 0 END) AS retained_cases,
+                SUM(CASE WHEN {refunded} THEN 1 ELSE 0 END) AS refunded_cases,
+                SUM(CASE WHEN {processed} THEN 1 ELSE 0 END) AS refund_processed,
                 SUM(
-                    CASE WHEN r.is_refund AND (
+                    CASE WHEN {applied} AND (
                         EXISTS (
                             SELECT 1 FROM {MASTER_DATASET_TABLE} m
                             WHERE m.block_amount_paid
@@ -2236,15 +2272,20 @@ class AnalyticsEngine:
         )
         row = rows[0] if rows else {}
         campus_refunds = self._refund_counts_by_campus()
+        refunded_count = int(row.get("refunded_cases") or 0)
         return {
             "total_cases": int(row.get("total_cases") or 0),
-            "refund_cases": int(row.get("refund_cases") or 0),
-            "refund_processed": int(row.get("refund_cases") or 0),
+            "retained_cases": int(row.get("retained_cases") or 0),
+            "refunded_cases": refunded_count,
+            "refund_cases": refunded_count,
+            "refund_processed": int(row.get("refund_processed") or 0),
             "digital_partner_refund_cases": int(
                 row.get("digital_partner_refund_cases") or 0
             ),
             "by_campus": campus_refunds["processed"],
             "refunds_applied_by_campus": campus_refunds["applied"],
+            "retained_by_campus": campus_refunds["retained"],
+            "refunded_by_campus": campus_refunds["refunded"],
             "dp_refund_requests": self._dp_refund_request_summary(),
         }
 
@@ -2281,6 +2322,7 @@ class AnalyticsEngine:
         dp_match = self._dp_refund_master_match_sql("r")
         ssahe_match = self._refund_campus_match_sql("SSAHE")
         adypu_match = self._refund_campus_match_sql("ADYPU")
+        applied = self._refund_applied_sql("r")
         rows = self.duck_repo.query_dicts(
             f"""
             SELECT
@@ -2292,10 +2334,10 @@ class AnalyticsEngine:
                     CASE WHEN {dp_match} AND ({adypu_match}) THEN 1 ELSE 0 END
                 ) AS adypu_requests,
                 SUM(
-                    CASE WHEN {dp_match} AND r.is_refund AND ({ssahe_match}) THEN 1 ELSE 0 END
+                    CASE WHEN {dp_match} AND {applied} AND ({ssahe_match}) THEN 1 ELSE 0 END
                 ) AS ssahe_refunded,
                 SUM(
-                    CASE WHEN {dp_match} AND r.is_refund AND ({adypu_match}) THEN 1 ELSE 0 END
+                    CASE WHEN {dp_match} AND {applied} AND ({adypu_match}) THEN 1 ELSE 0 END
                 ) AS adypu_refunded
             FROM {REFUND_TABLE} r
             """
@@ -2313,39 +2355,61 @@ class AnalyticsEngine:
             },
         }
 
-    def _refund_campus_match_sql(self, campus: str) -> str:
-        """SQL predicate for refund row campus/university text (ssahe or adypu)."""
-        if campus == "SSAHE":
-            return (
-                "UPPER(TRIM(COALESCE(r.campus, ''))) LIKE '%SSAHE%'"
-                " OR UPPER(TRIM(COALESCE(r.campus, ''))) LIKE '%TUMKUR%'"
-                " OR UPPER(TRIM(COALESCE(r.university, ''))) LIKE '%SSAHE%'"
-            )
+    def _refund_campus_bucket_sql(self, alias: str = "r") -> str:
+        """Mutually exclusive campus bucket from refund sheet (campus first, then university)."""
+        campus = f"UPPER(TRIM(COALESCE({alias}.campus, '')))"
+        uni = f"UPPER(TRIM(COALESCE({alias}.university, '')))"
         return (
-            "UPPER(TRIM(COALESCE(r.campus, ''))) LIKE '%ADYPU%'"
-            " OR UPPER(TRIM(COALESCE(r.campus, ''))) LIKE '%PUNE%'"
-            " OR UPPER(TRIM(COALESCE(r.university, ''))) LIKE '%ADYPU%'"
+            "CASE "
+            f"WHEN {campus} LIKE '%SSAHE%' OR {campus} LIKE '%TUMKUR%' THEN 'SSAHE' "
+            f"WHEN {campus} LIKE '%ADYPU%' OR {campus} LIKE '%PUNE%' THEN 'ADYPU' "
+            f"WHEN {uni} LIKE '%SSAHE%' OR {uni} LIKE '%TUMKUR%' THEN 'SSAHE' "
+            f"WHEN {uni} LIKE '%ADYPU%' OR {uni} LIKE '%PUNE%' THEN 'ADYPU' "
+            "ELSE '(blank)' END"
         )
+
+    def _refund_campus_match_sql(self, campus: str) -> str:
+        """SQL predicate for refund row campus bucket (ssahe or adypu, exclusive)."""
+        bucket = self._refund_campus_bucket_sql("r")
+        target = "SSAHE" if campus == "SSAHE" else "ADYPU"
+        return f"({bucket}) = '{target}'"
 
     def _refund_counts_by_campus(self) -> Dict[str, Dict[str, int]]:
         empty = {
             "applied": {"SSAHE": 0, "ADYPU": 0},
+            "retained": {"SSAHE": 0, "ADYPU": 0},
+            "refunded": {"SSAHE": 0, "ADYPU": 0},
             "processed": {"SSAHE": 0, "ADYPU": 0},
         }
         if not self.duck_repo.refund_exists():
             return empty
         ssahe_match = self._refund_campus_match_sql("SSAHE")
         adypu_match = self._refund_campus_match_sql("ADYPU")
+        on_hold = self._refund_on_hold_sql("r")
+        refunded = self._refund_refunded_status_sql("r")
+        processed = self._refund_processed_status_sql("r")
         rows = self.duck_repo.query_dicts(
             f"""
             SELECT
                 SUM(CASE WHEN ({ssahe_match}) THEN 1 ELSE 0 END) AS ssahe_applied,
-                SUM(
-                    CASE WHEN r.is_refund AND ({ssahe_match}) THEN 1 ELSE 0 END
-                ) AS ssahe_processed,
                 SUM(CASE WHEN ({adypu_match}) THEN 1 ELSE 0 END) AS adypu_applied,
                 SUM(
-                    CASE WHEN r.is_refund AND ({adypu_match}) THEN 1 ELSE 0 END
+                    CASE WHEN ({ssahe_match}) AND {on_hold} THEN 1 ELSE 0 END
+                ) AS ssahe_retained,
+                SUM(
+                    CASE WHEN ({adypu_match}) AND {on_hold} THEN 1 ELSE 0 END
+                ) AS adypu_retained,
+                SUM(
+                    CASE WHEN ({ssahe_match}) AND {refunded} THEN 1 ELSE 0 END
+                ) AS ssahe_refunded,
+                SUM(
+                    CASE WHEN ({adypu_match}) AND {refunded} THEN 1 ELSE 0 END
+                ) AS adypu_refunded,
+                SUM(
+                    CASE WHEN ({ssahe_match}) AND {processed} THEN 1 ELSE 0 END
+                ) AS ssahe_processed,
+                SUM(
+                    CASE WHEN ({adypu_match}) AND {processed} THEN 1 ELSE 0 END
                 ) AS adypu_processed
             FROM {REFUND_TABLE} r
             """
@@ -2355,6 +2419,14 @@ class AnalyticsEngine:
             "applied": {
                 "SSAHE": int(row.get("ssahe_applied") or 0),
                 "ADYPU": int(row.get("adypu_applied") or 0),
+            },
+            "retained": {
+                "SSAHE": int(row.get("ssahe_retained") or 0),
+                "ADYPU": int(row.get("adypu_retained") or 0),
+            },
+            "refunded": {
+                "SSAHE": int(row.get("ssahe_refunded") or 0),
+                "ADYPU": int(row.get("adypu_refunded") or 0),
             },
             "processed": {
                 "SSAHE": int(row.get("ssahe_processed") or 0),
@@ -2366,6 +2438,7 @@ class AnalyticsEngine:
         if not self.duck_repo.refund_exists() or not self.duck_repo.block_payment_exists():
             return None
         partners = self._canonical_partner_sql_list()
+        applied = self._refund_applied_sql("r")
         rows = self.duck_repo.query_dicts(
             f"""
             SELECT
@@ -2383,7 +2456,7 @@ class AnalyticsEngine:
                 OR (r.match_phone IS NOT NULL AND s.match_phone IS NOT NULL
                     AND r.match_phone = s.match_phone)
             )
-            WHERE r.is_refund
+            WHERE {applied}
               AND EXISTS (
                 SELECT 1 FROM {MASTER_DATASET_TABLE} m
                 WHERE m.block_amount_paid
@@ -2423,47 +2496,55 @@ class AnalyticsEngine:
         )
 
     def _overall_refund_by_campus_chart(self) -> Optional[ChartData]:
-        """All refund cases matched to the block payment sheet, grouped by campus."""
-        if not self.duck_repo.refund_exists() or not self.duck_repo.block_payment_exists():
+        """Refund cases, retained, and refunded by campus (aligned with KPI cards)."""
+        if not self.duck_repo.refund_exists():
             return None
+        bucket = self._refund_campus_bucket_sql("r")
+        on_hold = self._refund_on_hold_sql("r")
+        refunded = self._refund_refunded_status_sql("r")
         rows = self.duck_repo.query_dicts(
             f"""
             SELECT
-                COALESCE(NULLIF(TRIM(CAST(s.college_code AS VARCHAR)), ''), '(blank)') AS campus_code,
-                COALESCE(
-                    NULLIF(TRIM(CAST(s.college_name AS VARCHAR)), ''),
-                    NULLIF(TRIM(CAST(s.college_code AS VARCHAR)), ''),
-                    '(blank)'
-                ) AS campus_name,
-                COUNT(*) AS count
+                ({bucket}) AS campus_code,
+                COUNT(*) AS refund_cases,
+                SUM(CASE WHEN {on_hold} THEN 1 ELSE 0 END) AS retained_cases,
+                SUM(CASE WHEN {refunded} THEN 1 ELSE 0 END) AS refunded_cases
             FROM {REFUND_TABLE} r
-            INNER JOIN {BLOCK_PAYMENT_TABLE} s ON (
-                (r.match_email IS NOT NULL AND s.match_email IS NOT NULL
-                 AND r.match_email = s.match_email)
-                OR (r.match_phone IS NOT NULL AND s.match_phone IS NOT NULL
-                    AND r.match_phone = s.match_phone)
-            )
-            WHERE r.is_refund
-            GROUP BY 1, 2
-            ORDER BY count DESC
+            WHERE ({bucket}) IN ('SSAHE', 'ADYPU')
+            GROUP BY 1
+            ORDER BY refund_cases DESC
             """
         )
         if not rows:
             return None
+        label_map = {"SSAHE": "SSAHE, Tumkur", "ADYPU": "ADYPU, Pune"}
         categories = []
-        counts = []
+        refund_cases = []
+        retained_cases = []
+        refunded_cases = []
         for r in rows:
-            code = str(r.get("campus_code") or "(blank)")
-            name = self._campus_display_label(code, str(r.get("campus_name") or code))
-            label = name if name != "(blank)" else code
-            categories.append(label)
-            counts.append(int(r.get("count") or 0))
+            code = str(r.get("campus_code") or "")
+            categories.append(label_map.get(code, code))
+            refund_cases.append(int(r.get("refund_cases") or 0))
+            retained_cases.append(int(r.get("retained_cases") or 0))
+            refunded_cases.append(int(r.get("refunded_cases") or 0))
         return ChartData(
             chart_id="overall_refund_by_campus",
             chart_type="bar",
             title="Refund cases by campus",
             categories=categories,
-            series=[ChartSeries(name="Refunds", data=counts)],
+            series=[
+                ChartSeries(name="Refund cases", data=refund_cases),
+                ChartSeries(name="Retained", data=retained_cases),
+                ChartSeries(name="Refunded", data=refunded_cases),
+            ],
+            extra={
+                "series_colors": {
+                    "Refund cases": "#FFFFFF",
+                    "Retained": "#22C55E",
+                    "Refunded": "#E31E24",
+                }
+            },
         )
 
     def _dp_refund_counts_by_partner(
@@ -2480,12 +2561,13 @@ class AnalyticsEngine:
             partner_filter = "AND m.partner = ?"
             query_params.append(partner)
         filter_clause = f"AND {where.replace('WHERE ', '')}" if where else ""
+        applied = self._refund_applied_sql("r")
         rows = self.duck_repo.query_dicts(
             f"""
             SELECT m.partner AS partner, COUNT(*) AS count
             FROM {REFUND_TABLE} r
             INNER JOIN {MASTER_DATASET_TABLE} m ON (
-                r.is_refund
+                {applied}
                 AND m.block_amount_paid
                 AND m.partner IN ({partners})
                 AND (
@@ -2527,6 +2609,7 @@ class AnalyticsEngine:
             query_params.append(partner)
         filter_clause = f"AND {where.replace('WHERE ', '')}" if where else ""
         query_params.append(limit)
+        applied = self._refund_applied_sql("r")
         return self.duck_repo.query_dicts(
             f"""
             SELECT
@@ -2541,7 +2624,7 @@ class AnalyticsEngine:
                 r.utr
             FROM {REFUND_TABLE} r
             INNER JOIN {MASTER_DATASET_TABLE} m ON (
-                r.is_refund
+                {applied}
                 AND m.block_amount_paid
                 AND m.partner IN ({partners})
                 AND (

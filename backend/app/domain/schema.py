@@ -253,9 +253,15 @@ PERSONA_ACTIVITY_COLUMNS: List[str] = [
 BLOCK_PAYMENT_COLUMN_ALIASES: Dict[str, str] = {
     "id": "sheet_id",
     "email": "email",
+    "studentemail": "email",
+    "student email": "email",
     "fullname": "full_name",
     "full name": "full_name",
+    "studentname": "full_name",
+    "student name": "full_name",
     "phone": "phone",
+    "studentphone": "phone",
+    "student phone": "phone",
     "state": "state",
     "city": "city",
     "original utm: utm medium": "original_utm_medium",
@@ -273,6 +279,11 @@ BLOCK_PAYMENT_COLUMN_ALIASES: Dict[str, str] = {
     "gender": "gender",
     "seatblocking: collegecode": "college_code",
     "seatblocking: collegename": "college_name",
+    "collegecode": "college_code",
+    "college code": "college_code",
+    "collegename": "college_name",
+    "college name": "college_name",
+    "campus": "college_code",
 }
 
 BLOCK_PAYMENT_COLUMNS: List[str] = [

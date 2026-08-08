@@ -9,9 +9,10 @@ import { useFetch } from '@/hooks/use-fetch';
 import { DataTable } from '@/components/tables/data-table';
 import { IndiaMap } from '@/components/charts/india-map';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
-import { BlockPaymentTrackingRow } from '@/types';
+import { BlankCampusRow, BlockPaymentTrackingRow } from '@/types';
 import { cn, formatNumber } from '@/lib/utils';
 import { isLeadershipMode } from '@/lib/static-mode';
+import { usePortalAuthStore } from '@/store/portal-auth-store';
 
 type UploadStep = 'idle' | 'uploading' | 'done' | 'error';
 
@@ -28,6 +29,7 @@ function isCounsellorPaymentSource(value: unknown): boolean {
 
 export default function BlockPaymentPage() {
   const leadership = isLeadershipMode();
+  usePortalAuthStore((s) => s.isAdmin);
   // No global filter bar on this page — always show full reconciliation set.
   const filters = useMemo(() => ({}), []);
 
@@ -36,11 +38,24 @@ export default function BlockPaymentPage() {
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const [fillStep, setFillStep] = useState<UploadStep>('idle');
+  const [fillError, setFillError] = useState<string | null>(null);
+  const [fillMessage, setFillMessage] = useState<string | null>(null);
+  const [fillDragging, setFillDragging] = useState(false);
+  const fillInputRef = useRef<HTMLInputElement>(null);
+
   const [sheetRefresh, setSheetRefresh] = useState(0);
 
   const { data: sheetStatus, refetch: refetchStatus } = useFetch({
     fetcher: () => api.getBlockPaymentStatus(),
     deps: [sheetRefresh],
+  });
+
+  const { data: blankCampus, refetch: refetchBlankCampus } = useFetch({
+    fetcher: () => api.getBlankCampusRows(),
+    deps: [sheetRefresh],
+    enabled: canUpload(),
   });
 
   const { data: backtracking, loading, refetch: refetchBacktracking } = useFetch({
@@ -53,22 +68,48 @@ export default function BlockPaymentPage() {
     deps: [sheetRefresh],
   });
 
-  const uploadFile = useCallback(async (file: File) => {
-    setUploadStep('uploading');
-    setUploadError(null);
-    setUploadMessage(null);
-    try {
-      const result = await api.uploadBlockPaymentSheet(file);
-      setUploadMessage(result.message);
-      setUploadStep('done');
-      setSheetRefresh((n) => n + 1);
-      refetchStatus();
-      refetchBacktracking();
-    } catch (e) {
-      setUploadError(e instanceof Error ? e.message : 'Upload failed');
-      setUploadStep('error');
-    }
-  }, [refetchBacktracking, refetchStatus]);
+  const refreshAll = useCallback(() => {
+    setSheetRefresh((n) => n + 1);
+    refetchStatus();
+    refetchBacktracking();
+    refetchBlankCampus();
+  }, [refetchBacktracking, refetchBlankCampus, refetchStatus]);
+
+  const uploadFile = useCallback(
+    async (file: File) => {
+      setUploadStep('uploading');
+      setUploadError(null);
+      setUploadMessage(null);
+      try {
+        const result = await api.uploadBlockPaymentSheet(file);
+        setUploadMessage(result.message);
+        setUploadStep('done');
+        refreshAll();
+      } catch (e) {
+        setUploadError(e instanceof Error ? e.message : 'Upload failed');
+        setUploadStep('error');
+      }
+    },
+    [refreshAll]
+  );
+
+  const uploadFillFile = useCallback(
+    async (file: File) => {
+      setFillStep('uploading');
+      setFillError(null);
+      setFillMessage(null);
+      try {
+        const result = await api.uploadCampusFillSheet(file);
+        setFillMessage(result.message);
+        setFillStep('done');
+        refreshAll();
+      } catch (e) {
+        setFillError(e instanceof Error ? e.message : 'Campus fill failed');
+        setFillStep('error');
+      }
+    },
+    [refreshAll]
+  );
 
   const handleFiles = (incoming: FileList | File[]) => {
     const allowed = ['.xlsx', '.xls', '.csv'];
@@ -81,6 +122,19 @@ export default function BlockPaymentPage() {
       return;
     }
     uploadFile(file);
+  };
+
+  const handleFillFiles = (incoming: FileList | File[]) => {
+    const allowed = ['.xlsx', '.xls', '.csv'];
+    const file = Array.from(incoming).find((f) =>
+      allowed.some((ext) => f.name.toLowerCase().endsWith(ext))
+    );
+    if (!file) {
+      setFillError('Use an Excel (.xlsx, .xls) or CSV file.');
+      setFillStep('error');
+      return;
+    }
+    uploadFillFile(file);
   };
 
   const columns: ColumnDef<BlockPaymentTrackingRow>[] = useMemo(
@@ -135,6 +189,17 @@ export default function BlockPaymentPage() {
     []
   );
 
+  const blankColumns: ColumnDef<BlankCampusRow>[] = useMemo(
+    () => [
+      { accessorKey: 'full_name', header: 'Name', meta: { width: '20%' } },
+      { accessorKey: 'email', header: 'Email', meta: { width: '25%' } },
+      { accessorKey: 'phone', header: 'Phone', meta: { width: '18%' } },
+      { accessorKey: 'gender', header: 'Gender', meta: { width: '12%' } },
+      { accessorKey: 'sheet_id', header: 'Sheet ID', meta: { width: '15%' } },
+    ],
+    []
+  );
+
   const rows = backtracking?.rows ?? [];
   const clashRows = backtracking?.clash_rows ?? [];
   const matchedCount = backtracking?.matched_count ?? 0;
@@ -142,6 +207,9 @@ export default function BlockPaymentPage() {
   const clashCount = backtracking?.clash_count ?? 0;
   const totalBlockPaid = backtracking?.total_block_paid ?? 0;
   const uploadsEnabled = canUpload();
+  const blankRows = blankCampus?.items ?? [];
+  const blankTotal =
+    blankCampus?.total ?? sheetStatus?.blank_campus_count ?? blankRows.length;
 
   return (
     <div className="space-y-4">
@@ -170,6 +238,12 @@ export default function BlockPaymentPage() {
                 <span className="text-text">
                   {new Date(sheetStatus.uploaded_at).toLocaleString()}
                 </span>
+              </span>
+            )}
+            {blankTotal > 0 && (
+              <span>
+                Blank campus:{' '}
+                <span className="text-amber-400">{formatNumber(blankTotal)}</span>
               </span>
             )}
           </div>
@@ -239,7 +313,7 @@ export default function BlockPaymentPage() {
             <Upload className="w-8 h-8 mx-auto text-text-secondary mb-2" />
             <p className="text-sm text-text">Drop block amount paid sheet here</p>
             <p className="text-xs text-text-secondary mt-1">
-              Excel or CSV · replaces any previously uploaded sheet on this tab
+              Full Metabase export (keeps gender, state, payment source) · replaces the main sheet
             </p>
             <input
               ref={inputRef}
@@ -260,6 +334,140 @@ export default function BlockPaymentPage() {
           </p>
         )}
       </div>
+
+      {uploadsEnabled && sheetStatus?.has_data && (
+        <>
+          <SectionHeader
+            title="Campus fill sheet"
+            subtitle="Only fills blank college_code / college_name. Does not change gender, state, or payment source."
+          />
+          <div className="panel p-4 space-y-3">
+            {(sheetStatus.campus_fill_filename || sheetStatus.campus_fill_uploaded_at) && (
+              <div className="flex flex-wrap items-center gap-4 text-xs text-text-secondary border-b border-border pb-3">
+                {sheetStatus.campus_fill_filename && (
+                  <span>
+                    Last fill:{' '}
+                    <span className="text-text">{sheetStatus.campus_fill_filename}</span>
+                  </span>
+                )}
+                {sheetStatus.campus_fill_uploaded_at && (
+                  <span>
+                    {new Date(sheetStatus.campus_fill_uploaded_at).toLocaleString()}
+                  </span>
+                )}
+                {typeof sheetStatus.campus_fill_updated_count === 'number' && (
+                  <span>
+                    Updated{' '}
+                    <span className="text-text">
+                      {formatNumber(sheetStatus.campus_fill_updated_count)}
+                    </span>{' '}
+                    row(s)
+                  </span>
+                )}
+              </div>
+            )}
+
+            {fillStep === 'uploading' && (
+              <div className="flex items-center gap-2 text-sm text-text-secondary py-6 justify-center">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Applying campus fill sheet…
+              </div>
+            )}
+
+            {(fillStep === 'done' || fillStep === 'error') && (
+              <div
+                className={cn(
+                  'flex items-start gap-2 text-sm p-3 border',
+                  fillStep === 'done'
+                    ? 'border-emerald-500/30 text-emerald-400'
+                    : 'border-red-500/30 text-red-400'
+                )}
+              >
+                {fillStep === 'done' ? (
+                  <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <p>{fillStep === 'done' ? fillMessage : fillError}</p>
+                  <button
+                    type="button"
+                    className="text-xs underline mt-1 opacity-80 hover:opacity-100"
+                    onClick={() => {
+                      setFillStep('idle');
+                      setFillError(null);
+                      setFillMessage(null);
+                    }}
+                  >
+                    Upload another fill file
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {fillStep === 'idle' && (
+              <div
+                className={cn(
+                  'border border-dashed rounded-sm p-8 text-center transition-colors cursor-pointer',
+                  fillDragging
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border hover:border-primary/50'
+                )}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setFillDragging(true);
+                }}
+                onDragLeave={() => setFillDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setFillDragging(false);
+                  if (e.dataTransfer.files.length) handleFillFiles(e.dataTransfer.files);
+                }}
+                onClick={() => fillInputRef.current?.click()}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') fillInputRef.current?.click();
+                }}
+              >
+                <Upload className="w-8 h-8 mx-auto text-text-secondary mb-2" />
+                <p className="text-sm text-text">Drop campus fill sheet here</p>
+                <p className="text-xs text-text-secondary mt-1">
+                  StudentEmail / StudentPhone + CollegeCode (+ CollegeName). Do not upload this as the main sheet.
+                </p>
+                <input
+                  ref={fillInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files?.length) handleFillFiles(e.target.files);
+                    e.target.value = '';
+                  }}
+                />
+              </div>
+            )}
+          </div>
+
+          <SectionHeader
+            title="Blank campus rows"
+            subtitle={`${formatNumber(blankTotal)} rows missing college_code — export, fill, then upload above`}
+          />
+          {blankTotal === 0 ? (
+            <p className="text-sm text-text-secondary panel p-3">
+              No blank campus rows on the block amount sheet.
+            </p>
+          ) : (
+            <DataTable
+              data={blankRows}
+              columns={blankColumns}
+              exportFilename="block_blank_campus.csv"
+              searchPlaceholder="Search blank campus rows…"
+              height="auto"
+            />
+          )}
+        </>
+      )}
 
       <SectionHeader
         title="Reconciliation"

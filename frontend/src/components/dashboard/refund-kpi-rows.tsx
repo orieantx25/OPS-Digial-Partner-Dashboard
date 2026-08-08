@@ -1,7 +1,6 @@
 'use client';
 
 import { CampusBifurcation, RefundCaseRow } from '@/types';
-import { formatNumber } from '@/lib/utils';
 import { dpRefundRequestKpiItems } from '@/components/dashboard/dp-refund-kpi';
 import {
   KpiCategoryRow,
@@ -18,7 +17,6 @@ export function RefundKpiRows({
   const refund = campus?.refund_summary;
   const grossTotal = campus?.sheet_total ?? 0;
   const activeTotal = campus?.adjusted_sheet_total ?? grossTotal;
-  const removed = Math.max(0, grossTotal - activeTotal);
 
   return (
     <KpiDashboardStack>
@@ -29,13 +27,29 @@ export function RefundKpiRows({
           {
             label: 'Active block',
             value: activeTotal,
-            sub: removed > 0 ? `${formatNumber(removed)} removed from sheet` : undefined,
-            primary: true,
+            valueClassName: 'text-green-500',
           },
-          { label: 'Total refunds applied', value: refund?.total_cases ?? 0 },
           {
-            label: 'Refund processed',
-            value: refund?.refund_processed ?? refund?.refund_cases ?? 0,
+            label: 'Total refund applied',
+            value: refund?.total_cases ?? 0,
+            sub: 'All students on refund sheet',
+            valueClassName: 'text-white',
+          },
+          {
+            label: 'Retained',
+            value: refund?.retained_cases ?? 0,
+            sub: 'On hold as per SST team',
+            valueClassName: 'text-green-500',
+          },
+          {
+            label: 'Refund request sent to university',
+            value: refund?.refund_processed ?? 0,
+            valueClassName: 'text-yellow-400',
+          },
+          {
+            label: 'Refunded',
+            value: refund?.refunded_cases ?? refund?.refund_cases ?? 0,
+            valueClassName: 'text-red-500',
           },
         ]}
       />

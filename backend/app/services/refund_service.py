@@ -42,11 +42,24 @@ def normalize_provisional_id(value: Optional[str]) -> Optional[str]:
     return text if text and text not in {"(BLANK)", "NA", "N/A", "-"} else None
 
 
+def is_on_hold_sst_status(value: Optional[str]) -> bool:
+    """Final statuses held by SST are not treated as refund applied."""
+    if value is None:
+        return False
+    text = re.sub(r"\s+", " ", str(value).strip().lower())
+    if not text:
+        return False
+    return "on hold" in text and "sst" in text
+
+
 def is_refund_final_status(value: Optional[str]) -> bool:
     if value is None:
         return False
     text = str(value).strip().lower()
     if not text:
+        return False
+    # On hold as per SST team (and variants) must not count as refund applied.
+    if is_on_hold_sst_status(text):
         return False
     return "refund" in text
 

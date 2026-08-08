@@ -23,6 +23,14 @@ async def block_payment_status(
     return service.get_status()
 
 
+@router.get("/blank-campus")
+async def list_blank_campus_rows(
+    service: BlockPaymentService = Depends(get_block_payment_service),
+    user: UserInfo = Depends(require_authenticated_user),
+):
+    return service.list_blank_campus_rows()
+
+
 @router.post("/upload")
 async def upload_block_payment_sheet(
     file: UploadFile = File(...),
@@ -65,4 +73,49 @@ async def upload_block_payment_sheet(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Upload failed: {exc}",
+        ) from exc
+
+
+@router.post("/campus-fill")
+async def upload_campus_fill_sheet(
+    file: UploadFile = File(...),
+    service: BlockPaymentService = Depends(get_block_payment_service),
+    user: UserInfo = Depends(require_write_access),
+):
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No file provided",
+        )
+
+    ext = file.filename.rsplit(".", 1)[-1].lower()
+    if ext not in ("xlsx", "xls", "csv"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file type. Use .xlsx, .xls, or .csv",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File is empty",
+        )
+
+    try:
+        result = service.apply_campus_fill_sheet(file.filename, content)
+        logger.info(
+            "block_payment_campus_fill_uploaded",
+            user=user.username,
+            filename=file.filename,
+            updated=result.get("updated"),
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("block_payment_campus_fill_failed", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Campus fill failed: {exc}",
         ) from exc

@@ -19,7 +19,8 @@ export function MobileBottomNav() {
 
   const isMoreActive = !MOBILE_BOTTOM_TABS.some(
     (t) =>
-      pathname === t.href || (t.href !== '/' && pathname.startsWith(t.href))
+      pathname === t.href ||
+      (t.href !== '/digital-partner' && pathname.startsWith(t.href))
   );
 
   return (
@@ -32,7 +33,7 @@ export function MobileBottomNav() {
           const Icon = TAB_ICONS[tab.id];
           const active =
             pathname === tab.href ||
-            (tab.href !== '/' && pathname.startsWith(tab.href));
+            (tab.href !== '/digital-partner' && pathname.startsWith(tab.href));
           return (
             <Link
               key={tab.id}

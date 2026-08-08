@@ -33,7 +33,6 @@ export default function CampusPage() {
   const adjustedCampusChart = data?.adjusted_sheet_campus_chart as ChartData | undefined;
   const adjustedGenderChart = data?.adjusted_sheet_gender_chart as ChartData | undefined;
   const adjustedCampusGenderCharts = data?.adjusted_sheet_campus_gender_charts ?? [];
-  const overallRefundChart = data?.overall_refund_by_campus_chart as ChartData | undefined;
   const dpRefundChart = data?.dp_refund_by_campus_chart as ChartData | undefined;
   const genderChart = data?.gender_chart as ChartData | undefined;
   const campusGenderCharts = data?.campus_gender_charts ?? [];
@@ -150,14 +149,9 @@ export default function CampusPage() {
                 ))}
               </div>
             )}
-            {(overallRefundChart || dpRefundChart) && (
+            {dpRefundChart && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 pt-2 border-t border-border">
-                {overallRefundChart && (
-                  <ChartPanel chart={overallRefundChart} height={chartSm} />
-                )}
-                {dpRefundChart && (
-                  <ChartPanel chart={dpRefundChart} height={chartSm} />
-                )}
+                <ChartPanel chart={dpRefundChart} height={chartSm} />
               </div>
             )}
           </section>

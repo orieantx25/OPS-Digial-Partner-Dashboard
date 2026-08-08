@@ -1,5 +1,8 @@
 /** Static / leadership deploy helpers (Vercel, no backend). */
 
+import { isPortalAuthEnabled } from '@/lib/portal-mode';
+import { getPortalAuthToken } from '@/store/portal-auth-store';
+
 export type SnapshotScopeId = 'all' | '7d' | 'mtd' | '30d' | 'month';
 
 export interface SnapshotScopeMeta {
@@ -29,19 +32,15 @@ export function isLeadershipMode(): boolean {
   );
 }
 
-const SNAPSHOT_BASE = '/data/snapshots';
+const SNAPSHOT_PUBLIC_BASE = '/data/snapshots';
+const SNAPSHOT_API_BASE = '/api/snapshots';
 
 let manifestPromise: Promise<SnapshotManifest | null> | null = null;
 
 export async function getSnapshotManifest(): Promise<SnapshotManifest | null> {
   if (!isStaticDataMode()) return null;
   if (!manifestPromise) {
-    manifestPromise = fetch(`${SNAPSHOT_BASE}/manifest.json`)
-      .then(async (res) => {
-        if (!res.ok) return null;
-        return (await res.json()) as SnapshotManifest;
-      })
-      .catch(() => null);
+    manifestPromise = fetchSnapshotJson<SnapshotManifest>('manifest.json').catch(() => null);
   }
   return manifestPromise;
 }
@@ -78,11 +77,25 @@ export function resolveSnapshotScope(
 }
 
 export function snapshotUrl(relPath: string): string {
-  return `${SNAPSHOT_BASE}/${relPath.replace(/^\//, '')}`;
+  const clean = relPath.replace(/^\//, '');
+  if (isPortalAuthEnabled()) {
+    return `${SNAPSHOT_API_BASE}/${clean}`;
+  }
+  return `${SNAPSHOT_PUBLIC_BASE}/${clean}`;
 }
 
 export async function fetchSnapshotJson<T>(relPath: string): Promise<T> {
-  const res = await fetch(snapshotUrl(relPath));
+  const url = snapshotUrl(relPath);
+  const headers: Record<string, string> = {};
+  if (isPortalAuthEnabled()) {
+    const token = getPortalAuthToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
+
+  const res = await fetch(url, {
+    headers,
+    credentials: isPortalAuthEnabled() ? 'include' : 'same-origin',
+  });
   if (!res.ok) {
     throw new Error(
       res.status === 404

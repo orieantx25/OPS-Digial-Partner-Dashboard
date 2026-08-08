@@ -557,7 +557,7 @@ function PartnerPageInner() {
                     {formatNumber(refundCount)}
                   </div>
                   <div className="text-[10px] text-text-secondary mt-0.5">
-                    Block paid · refund processed
+                    Block paid · sent to university
                   </div>
                 </div>
               </div>

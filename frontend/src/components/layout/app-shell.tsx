@@ -13,18 +13,24 @@ import { LeadExplorerDrawer } from '@/components/leads/lead-explorer-drawer';
 import { useDatasetStats } from '@/hooks/use-dataset-stats';
 import { canUpload, useAuthBootstrap } from '@/hooks/use-auth-bootstrap';
 import { isLeadershipMode } from '@/lib/static-mode';
+import { usePortalAuthStore } from '@/store/portal-auth-store';
 import { cn } from '@/lib/utils';
 
 /** Pages where the global filter bar does not apply (ops/upload tools). */
-const HIDE_FILTER_BAR = new Set(['/upload', '/block-payment']);
+const HIDE_FILTER_BAR = new Set([
+  '/digital-partner/upload',
+  '/digital-partner/block-payment',
+]);
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const authReady = useAuthBootstrap();
+  // Subscribe so upload chrome updates when portal admin flag resolves.
+  usePortalAuthStore((s) => s.isAdmin);
   const { totalRows } = useDatasetStats();
   const pathname = usePathname();
   const showFilterBar = !HIDE_FILTER_BAR.has(pathname);
   const leadership = isLeadershipMode();
-
+  const uploadsEnabled = canUpload();
   if (!authReady) {
     return (
       <div className="min-h-screen bg-bg flex items-center justify-center">
@@ -39,7 +45,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <MobileTopBar />
       <MobileNavDrawer />
       {leadership && <MobileBottomNav />}
-      {canUpload() && <QuickUploadModal />}
+      {uploadsEnabled && <QuickUploadModal />}
       {!leadership && <LeadExplorerDrawer />}
       <div
         className={cn(

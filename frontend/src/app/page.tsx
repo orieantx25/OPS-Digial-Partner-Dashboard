@@ -1,493 +1,191 @@
 'use client';
 
-import dynamic from 'next/dynamic';
-import { useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { api } from '@/lib/api';
-import { useFetch, useDebouncedValue } from '@/hooks/use-fetch';
-import { useChartHeight } from '@/hooks/use-chart-height';
-import { useAppStore, useEffectiveFilters } from '@/store/app-store';
-import { MetricStrip } from '@/components/dashboard/metric-strip';
-import { AlertsPanel } from '@/components/dashboard/alerts-panel';
-import { InsightStrip } from '@/components/dashboard/insight-strip';
-import { FetchingHint } from '@/components/dashboard/fetching-hint';
-import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
-import { DataTable, useLeadColumns } from '@/components/tables/data-table';
-import { EMPTY_EXECUTIVE_CHARTS, EMPTY_KPIS } from '@/lib/empty-defaults';
-import { FUNNEL_STAGE_LEAD_FILTERS } from '@/lib/funnel-filters';
-import { dpRefundInsightItems } from '@/lib/dp-refund-insights';
-import { useDatasetStats } from '@/hooks/use-dataset-stats';
-import { useLeadExplorerStore } from '@/store/lead-explorer-store';
-import { isLeadershipMode } from '@/lib/static-mode';
-import { cn, formatNumber, formatPct } from '@/lib/utils';
-import { ChartData, KpiMetric } from '@/types';
+import { useState } from 'react';
+import Link from 'next/link';
+import Image from 'next/image';
+import {
+  ArrowRight,
+  ArrowUpRight,
+  Building2,
+  IndianRupee,
+  LayoutDashboard,
+  Loader2,
+  Undo2,
+} from 'lucide-react';
+import { usePortalAuthStore } from '@/store/portal-auth-store';
+import { isPortalAuthEnabled } from '@/lib/portal-mode';
 
-const ChartPanel = dynamic(
-  () => import('@/components/charts/chart-panel').then((m) => m.ChartPanel),
+const DASHBOARDS = [
   {
-    ssr: false,
-    loading: () => (
-      <div className="panel h-[280px] flex items-center justify-center text-text-secondary text-sm">
-        Loading chart…
-      </div>
-    ),
-  }
-);
-
-const IndiaMap = dynamic(
-  () => import('@/components/charts/india-map').then((m) => m.IndiaMap),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="panel h-[280px] flex items-center justify-center text-text-secondary text-sm">
-        Loading map…
-      </div>
-    ),
-  }
-);
-
-const BLOCK_BULLET_TOP_N = 5;
-
-function buildBlockAmountPoints(chart: ChartData | undefined): string[] {
-  if (!chart?.categories?.length) {
-    return ['No partner block amount data is available for the current filters.'];
-  }
-
-  const totals = (chart.extra?.block_amount_total as number[] | undefined) ?? [];
-  const blockSeries = chart.series.find((s) => s.name === 'Block Amount')?.data ?? [];
-  const clashSeries = chart.series.find((s) => s.name === 'Counsellor Clashes')?.data ?? [];
-  const refundSeries = chart.series.find((s) => s.name === 'DP Refunds')?.data ?? [];
-  const rows = chart.categories
-    .map((partner, i) => ({
-      partner: String(partner),
-      block: Number(
-        totals[i] ??
-          (Number(blockSeries[i] || 0) +
-            Number(clashSeries[i] || 0) +
-            Number(refundSeries[i] || 0))
-      ),
-    }))
-    .filter((r) => r.partner)
-    .sort((a, b) => b.block - a.block || a.partner.localeCompare(b.partner));
-
-  const total = rows.reduce((sum, r) => sum + r.block, 0);
-  const withBlocks = rows.filter((r) => r.block > 0);
-  const withoutBlocks = rows.filter((r) => r.block === 0);
-
-  if (total === 0) {
-    return [
-      `Across ${formatNumber(rows.length)} partners in view, no leads have paid block amount yet.`,
-    ];
-  }
-
-  const top = withBlocks.slice(0, BLOCK_BULLET_TOP_N);
-  const points = [
-    `Total block amount paid across partners: ${formatNumber(total)}`,
-    ...top.map((r) => `${r.partner}: ${formatNumber(r.block)}`),
-  ];
-
-  if (withBlocks.length > BLOCK_BULLET_TOP_N) {
-    points.push(
-      `+${withBlocks.length - BLOCK_BULLET_TOP_N} more partner(s) with block payments`
-    );
-  }
-
-  if (withoutBlocks.length > 0) {
-    points.push(
-      `${withoutBlocks.length} partner(s) with zero block amount paid`
-    );
-  }
-
-  return points;
-}
-
-function overviewInsights(
-  kpis: KpiMetric[],
-  funnel: ChartData | undefined,
-  partners: ChartData | undefined,
-  campus?: import('@/types').CampusBifurcation | null
-): { text: string }[] {
-  const items: { text: string }[] = [];
-  const byKey = new Map(kpis.map((k) => [k.key, k]));
-
-  const drops = (funnel?.extra?.drops as number[] | undefined) ?? [];
-  if (funnel?.categories?.length && drops.length) {
-    let maxIdx = 1;
-    for (let i = 1; i < drops.length; i++) {
-      if ((drops[i] ?? 0) > (drops[maxIdx] ?? 0)) maxIdx = i;
-    }
-    if ((drops[maxIdx] ?? 0) > 0) {
-      const from = funnel.categories[maxIdx - 1] ?? 'prior';
-      const to = funnel.categories[maxIdx] ?? 'next';
-      items.push({
-        text: `Largest drop-off: ${from} → ${to} (${formatPct(drops[maxIdx])} lost).`,
-      });
-    }
-  }
-
-  const block = byKey.get('block_amount_paid');
-  const offerLetters = byKey.get('offer_letters');
-  if (block && offerLetters && offerLetters.current > 0) {
-    items.push({
-      text: `Offer Letter → Block conversion: ${formatPct((block.current / offerLetters.current) * 100)} (${formatNumber(block.current)} of ${formatNumber(offerLetters.current)} offer letters).`,
-    });
-  } else if (block && offerLetters && offerLetters.current === 0 && block.current > 0) {
-    items.push({
-      text: `Block amount paid: ${formatNumber(block.current)} (no offer letters in scope to convert from).`,
-    });
-  }
-
-  items.push(...dpRefundInsightItems(campus, partners));
-
-  if (partners?.categories?.length && partners.series[0]?.data?.length) {
-    const leadData = partners.series[0].data.map((v) => Number(v) || 0);
-    const maxI = leadData.indexOf(Math.max(...leadData));
-    const minI = leadData.indexOf(Math.min(...leadData));
-    if (maxI >= 0 && minI >= 0 && maxI !== minI) {
-      items.push({
-        text: `Partner spread: ${partners.categories[maxI]} leads (${formatNumber(leadData[maxI])}) vs ${partners.categories[minI]} (${formatNumber(leadData[minI])}).`,
-      });
-    }
-  }
-
-  return items.slice(0, 6);
-}
-
-const METRIC_GROUPS = [
-  {
-    title: 'Pipeline',
-    keys: [
-      'total_leads', 'connected', 'ai_connected', 'ac_connected', 'mql', 'sql',
-      'applications', 'test_registrations', 'offer_letters', 'block_amount_paid', 'admissions',
-    ],
+    id: 'digital-partner',
+    title: 'Digital Partner',
+    description:
+      'Partner pipeline, funnel, block payment reconciliation, refunds, and executive KPIs.',
+    href: '/digital-partner',
+    icon: LayoutDashboard,
+    external: false,
   },
   {
-    title: 'Engagement',
-    keys: ['contactability', 'never_dialed', 'avg_dial_count', 'ai_calls', 'dnp_pct'],
+    id: 'campus-block',
+    title: 'Campus Block Amount',
+    description:
+      'Campus block payment bifurcation, refunds, and gender splits.',
+    href: '/campus-block',
+    icon: Building2,
+    external: false,
   },
-];
-
-const TREND_OPTIONS = [
-  { key: 'daily_leads', label: 'Daily' },
-  { key: 'weekly_leads', label: 'Weekly' },
-  { key: 'monthly_leads', label: 'Monthly' },
+  {
+    id: 'refund-cases',
+    title: 'Refund Cases',
+    description:
+      'Refund sheet KPIs, retained vs processed vs refunded, and campus distribution.',
+    href: '/refund-cases',
+    icon: Undo2,
+    external: false,
+  },
+  {
+    id: 'loans',
+    title: 'Loan Operations',
+    description:
+      'Loan pipeline, vendor tracking, risk cases, and campus bifurcation.',
+    href: null,
+    icon: IndianRupee,
+    external: true,
+  },
 ] as const;
 
-const METRIC_TREND_OPTIONS = [
-  { key: 'leads_trend', label: 'Leads trend' },
-  { key: 'test_taker_trend', label: 'Test taker trend' },
-  { key: 'persona_know_more_trend', label: 'Persona (know more about btech) trend' },
-  { key: 'block_amount_trend', label: 'Block amount trend' },
-] as const;
+export default function PortalHubPage() {
+  const email = usePortalAuthStore((s) => s.email);
+  const clearSession = usePortalAuthStore((s) => s.clearSession);
+  const memoryToken = usePortalAuthStore((s) => s.memoryToken);
+  const [loansLoading, setLoansLoading] = useState(false);
+  const [loansError, setLoansError] = useState<string | null>(null);
 
-export default function ExecutivePage() {
-  const router = useRouter();
-  const filters = useEffectiveFilters();
-  const { totalRows } = useDatasetStats();
-  const setDrillDown = useAppStore((s) => s.setDrillDown);
-  const openExplorer = useLeadExplorerStore((s) => s.openExplorer);
-  const leadership = isLeadershipMode();
-  const performanceChartHeight = useChartHeight(300, 240);
-  const funnelChartHeight = useChartHeight(380, 300);
-  const [trend, setTrend] = useState<(typeof TREND_OPTIONS)[number]['key']>('monthly_leads');
-  const [metricTrend, setMetricTrend] =
-    useState<(typeof METRIC_TREND_OPTIONS)[number]['key']>('leads_trend');
-  const [compareGrain, setCompareGrain] = useState<'week' | 'month'>('week');
-  const [leadSearch, setLeadSearch] = useState('');
-  const debouncedLeadSearch = useDebouncedValue(leadSearch, 300);
-  const hasDateRange = Boolean(filters.date_from && filters.date_to);
+  const signOut = async () => {
+    await fetch('/api/auth/me', { method: 'DELETE', credentials: 'include' });
+    clearSession();
+    window.location.href = '/login';
+  };
 
-  const { data: kpis, isFetching: kpisFetching } = useFetch({
-    fetcher: () => api.getExecutiveKpis(filters),
-    deps: [JSON.stringify(filters)],
-  });
+  const openLoans = async () => {
+    setLoansError(null);
+    setLoansLoading(true);
+    try {
+      const headers: Record<string, string> = {};
+      if (memoryToken) headers.Authorization = `Bearer ${memoryToken}`;
+      const res = await fetch('/api/auth/handoff', {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || 'Could not open Loan Operations');
+      window.location.href = data.url as string;
+    } catch (e) {
+      setLoansError(e instanceof Error ? e.message : 'Could not open Loan Operations');
+      setLoansLoading(false);
+    }
+  };
 
-  const { data: charts, isFetching: chartsFetching } = useFetch({
-    fetcher: () => api.getExecutiveCharts(filters),
-    deps: [JSON.stringify(filters)],
-  });
-
-  const { data: alerts } = useFetch({
-    fetcher: () => api.getAlerts(filters),
-    deps: [JSON.stringify(filters)],
-  });
-
-  const { data: compare, loading: compareLoading, error: compareError } = useFetch({
-    fetcher: () => api.getCompare(filters, compareGrain),
-    deps: [JSON.stringify(filters), compareGrain],
-  });
-
-  const chartsReady = charts != null;
-
-  const { data: leads } = useFetch({
-    fetcher: () =>
-      api.search(
-        { ...filters, search: debouncedLeadSearch || filters.search },
-        1,
-        25
-      ),
-    deps: [JSON.stringify(filters), debouncedLeadSearch],
-    enabled: chartsReady && !leadership,
-  });
-
-  const { data: stateSummary } = useFetch({
-    fetcher: () => api.getGeographicStates(filters),
-    deps: [JSON.stringify(filters)],
-  });
-
-  const { data: campusBifurcation } = useFetch({
-    fetcher: () => api.getCampusBifurcation(filters),
-    deps: [JSON.stringify(filters)],
-  });
-
-  const columns = useLeadColumns();
-  const displayKpis = kpis ?? EMPTY_KPIS;
-  const displayCharts = { ...EMPTY_EXECUTIVE_CHARTS, ...(charts ?? {}) };
-  const displayLeads = leads?.items ?? [];
-  const blockAmountPoints = useMemo(
-    () => buildBlockAmountPoints(displayCharts.partner_comparison),
-    [displayCharts.partner_comparison]
-  );
-  const insightItems = useMemo(
-    () =>
-      overviewInsights(
-        displayKpis,
-        displayCharts.funnel,
-        displayCharts.partner_comparison,
-        campusBifurcation
-      ),
-    [displayKpis, displayCharts.funnel, displayCharts.partner_comparison, campusBifurcation]
-  );
-  const isRefreshing = (kpisFetching || chartsFetching) && Boolean(kpis || charts);
+  const cardClass =
+    'group relative flex flex-col h-full min-h-[220px] p-6 lg:p-7 bg-panel border border-border rounded-sm transition-all duration-200 hover:border-primary/50 hover:bg-[#252628] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2';
 
   return (
-    <div className={cn('space-y-5', isRefreshing && 'opacity-90')}>
-      <PageHeader title="Overview" totalRows={totalRows} />
-      <FetchingHint active={isRefreshing} />
-
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
-        <div className="lg:col-span-7 min-h-[200px]">
-          <InsightStrip title="What stands out" items={insightItems} />
-        </div>
-        <div className="lg:col-span-5 min-h-[200px]">
-          <AlertsPanel alerts={alerts ?? []} maxHeightClass="max-h-[280px]" />
-        </div>
-      </div>
-
-      <SectionHeader
-        title="Period compare"
-        action={
-          <div className="flex border border-border">
-            {(['week', 'month'] as const).map((g) => (
-              <button
-                key={g}
-                type="button"
-                onClick={() => setCompareGrain(g)}
-                className={
-                  'px-3 py-1 text-xs uppercase ' +
-                  (compareGrain === g
-                    ? 'bg-primary text-white'
-                    : 'bg-surface text-text-secondary hover:text-text')
-                }
-              >
-                {g === 'week' ? 'WoW' : 'MoM'}
-              </button>
-            ))}
+    <div className="min-h-screen bg-[#0F0F10] text-white flex flex-col">
+      <header className="border-b border-border/80 px-6 lg:px-10 py-5 flex items-center justify-between gap-4 shrink-0">
+        <div className="flex items-center gap-5 min-w-0">
+          <Image
+            src="/logo-dark.png"
+            alt="upGrad School of Technology"
+            width={160}
+            height={56}
+            className="h-9 w-auto object-contain shrink-0"
+          />
+          <div className="hidden sm:block border-l border-border/80 pl-5 min-w-0">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-text-secondary">
+              Report hub
+            </p>
+            <h1 className="text-xl font-semibold tracking-tight">Analytics hub</h1>
           </div>
-        }
-      />
-      <div className="panel grid grid-cols-2 md:grid-cols-4 gap-px bg-border">
-        {(compare?.kpis ?? []).slice(0, 4).map((k) => (
-          <div key={k.key} className="bg-surface px-3 py-3">
-            <div className="text-[10px] uppercase tracking-widest text-text-secondary">
-              {k.label}
-            </div>
-            <div className="text-base font-semibold kpi-value mt-1">
-              {formatNumber(k.current)}
-            </div>
-            <div
-              className={cn(
-                'text-[11px] font-mono mt-0.5',
-                k.change_pct > 0 && 'text-success',
-                k.change_pct < 0 && 'text-danger',
-                k.change_pct === 0 && 'text-text-secondary'
-              )}
+        </div>
+        <div className="flex items-center gap-4 text-sm shrink-0">
+          {email && (
+            <span className="text-text-secondary hidden md:inline truncate max-w-[240px] text-xs">
+              {email}
+            </span>
+          )}
+          {isPortalAuthEnabled() && (
+            <button
+              type="button"
+              onClick={signOut}
+              className="text-text-secondary hover:text-white text-[10px] uppercase tracking-[0.15em] transition-colors"
             >
-              {k.change_pct === 0
-                ? '—'
-                : `${k.change_pct > 0 ? '▲' : '▼'} ${Math.abs(k.change_pct).toFixed(1)}% vs prior ${compareGrain}`}
-            </div>
-            {compare?.current_from && (
-              <div className="text-[10px] text-text-secondary mt-1">
-                {compare.current_from} → {compare.current_to}
-              </div>
-            )}
-          </div>
-        ))}
-        {compareLoading && !compare?.kpis?.length && (
-          <div className="bg-surface px-3 py-3 col-span-full text-xs text-text-secondary">
-            Loading compare metrics…
-          </div>
-        )}
-        {!compareLoading && compareError && (
-          <div className="bg-surface px-3 py-3 col-span-full text-xs text-danger">
-            Could not load period compare: {compareError}
-          </div>
-        )}
-        {!compareLoading && !compareError && compare && !compare.kpis?.length && (
-          <div className="bg-surface px-3 py-3 col-span-full text-xs text-text-secondary">
-            No compare metrics for this scope.
-          </div>
-        )}
-      </div>
+              Sign out
+            </button>
+          )}
+        </div>
+      </header>
 
-      <SectionHeader
-        title="Performance"
-        action={
-          <div className="flex border border-border">
-            {TREND_OPTIONS.map((opt) => (
-              <button
-                key={opt.key}
-                type="button"
-                onClick={() => setTrend(opt.key)}
-                className={
-                  'px-3 py-1 text-xs ' +
-                  (trend === opt.key
-                    ? 'bg-primary text-white'
-                    : 'bg-surface text-text-secondary hover:text-text')
-                }
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        }
-      />
-      <ChartPanel chart={displayCharts[trend]} height={performanceChartHeight} />
+      <main className="flex-1 flex flex-col justify-center w-full max-w-6xl mx-auto px-6 lg:px-10 py-10 lg:py-14">
+        {loansError && (
+          <p className="text-danger text-sm mb-6 text-center" role="alert">{loansError}</p>
+        )}
 
-      <div className="grid grid-cols-12 gap-3">
-        <div className="col-span-12 lg:col-span-5">
-          <ChartPanel
-            chart={displayCharts.funnel}
-            height={funnelChartHeight}
-            onCategoryClick={
-              leadership
-                ? undefined
-                : (stage) => openExplorer(stage, FUNNEL_STAGE_LEAD_FILTERS[stage])
+        <div className="grid gap-4 sm:gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          {DASHBOARDS.map((card) => {
+            const Icon = card.icon;
+            const Arrow = card.external ? ArrowUpRight : ArrowRight;
+
+            const inner = (
+              <>
+                <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-sm bg-primary/10 border border-primary/25">
+                  <Icon className="h-5 w-5 text-primary" strokeWidth={1.75} />
+                </div>
+                <h2 className="text-lg font-semibold tracking-tight mb-2 pr-6">{card.title}</h2>
+                <p className="text-sm text-text-secondary leading-relaxed flex-1">
+                  {card.description}
+                </p>
+                <div className="mt-5 flex items-center justify-between gap-3 pt-4 border-t border-border/60">
+                  {card.id === 'loans' && loansLoading ? (
+                    <span className="text-xs text-text-secondary flex items-center gap-2">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Opening…
+                    </span>
+                  ) : (
+                    <span className="text-[10px] uppercase tracking-[0.15em] text-text-secondary group-hover:text-primary transition-colors">
+                      {card.external ? 'Open app' : 'Open dashboard'}
+                    </span>
+                  )}
+                  <Arrow
+                    className="h-4 w-4 text-text-secondary opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200 group-hover:text-primary shrink-0"
+                    strokeWidth={2}
+                  />
+                </div>
+              </>
+            );
+
+            if (card.external) {
+              return (
+                <button
+                  key={card.id}
+                  type="button"
+                  onClick={openLoans}
+                  disabled={loansLoading}
+                  className={`${cardClass} text-left disabled:opacity-60 disabled:pointer-events-none`}
+                >
+                  {inner}
+                </button>
+              );
             }
-          />
-        </div>
-        <div className="col-span-12 lg:col-span-7">
-          <ChartPanel
-            chart={displayCharts.partner_comparison}
-            height={funnelChartHeight}
-            onCategoryClick={(partner) => {
-              if (leadership) {
-                router.push(`/partner?partner=${encodeURIComponent(partner)}`);
-                return;
-              }
-              setDrillDown({ partner });
-            }}
-          />
-        </div>
-      </div>
 
-      <div className="grid grid-cols-12 gap-3">
-        <div className="col-span-12 lg:col-span-4 min-w-0 h-auto min-h-[240px] lg:h-[320px] [&>.panel]:h-full [&>.panel]:box-border">
-          <IndiaMap
-            data={stateSummary ?? []}
-            dimension="leads"
-            dimensionLabel="Leads"
-            title="Lead Distribution — India"
-            height={268}
-          />
+            return (
+              <Link key={card.id} href={card.href!} className={cardClass}>
+                {inner}
+              </Link>
+            );
+          })}
         </div>
-        <div className="col-span-12 lg:col-span-4 min-w-0 h-auto min-h-[240px] lg:h-[320px] [&>.panel]:h-full [&>.panel]:box-border">
-          <ChartPanel chart={displayCharts.lead_sources} height={268} />
-        </div>
-        <div className="col-span-12 lg:col-span-4 min-w-0 h-auto min-h-[240px] lg:h-[320px]">
-          <div className="panel p-3 h-full box-border flex flex-col overflow-hidden">
-            <div className="mb-2 shrink-0 min-w-0 space-y-1.5">
-              <div className="text-sm font-semibold text-text">Trend</div>
-              <select
-                className="w-full min-w-0 appearance-none bg-surface border border-border text-text text-xs py-1.5 px-3 rounded-none text-center [text-align-last:center] focus:outline-none focus:border-border hover:border-border"
-                value={metricTrend}
-                onChange={(e) =>
-                  setMetricTrend(e.target.value as (typeof METRIC_TREND_OPTIONS)[number]['key'])
-                }
-                aria-label="Select trend metric"
-              >
-                {METRIC_TREND_OPTIONS.map((opt) => (
-                  <option key={opt.key} value={opt.key} className="text-left">
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="min-h-0 flex-1 overflow-hidden">
-              <ChartPanel
-                chart={{
-                  ...(displayCharts[metricTrend] ?? EMPTY_EXECUTIVE_CHARTS.leads_trend),
-                  title: '',
-                  extra: {
-                    ...(displayCharts[metricTrend]?.extra ?? {}),
-                    compact_grid: true,
-                  },
-                }}
-                height={228}
-                className="!border-0 !bg-transparent !p-0"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <SectionHeader
-        title="Block amount by partner"
-        subtitle="Top partners by block amount paid"
-      />
-      <div className="panel p-4">
-        <ul className="space-y-2 text-sm text-text">
-          {blockAmountPoints.map((point) => (
-            <li key={point} className="flex gap-2 leading-relaxed">
-              <span className="text-primary shrink-0 mt-1.5 w-1.5 h-1.5 rounded-full bg-primary" />
-              <span>{point}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <SectionHeader
-        title="Key Metrics"
-        subtitle={
-          hasDateRange
-            ? 'vs prior equal period'
-            : 'Set a date range (or preset) to see period-over-period deltas'
-        }
-      />
-      <MetricStrip metrics={displayKpis} groups={METRIC_GROUPS} />
-
-      {!leadership && (
-        <>
-          <SectionHeader
-            title="Lead Explorer"
-            subtitle="Click any metric box above to filter leads, or search below"
-          />
-          <DataTable
-            data={displayLeads as unknown as Record<string, unknown>[]}
-            columns={columns}
-            onRowClick={(row) => {
-              if (row.partner) setDrillDown({ partner: String(row.partner), state: String(row.state) });
-            }}
-            exportFilename="executive_leads.csv"
-            searchPlaceholder="Search ID, name, email, phone, partner, state..."
-            searchValue={leadSearch}
-            onSearchChange={setLeadSearch}
-            totalCount={leads?.total}
-            height={360}
-          />
-        </>
-      )}
+      </main>
     </div>
   );
 }

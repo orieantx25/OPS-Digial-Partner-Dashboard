@@ -4,6 +4,7 @@ import polars as pl
 
 from app.services.refund_service import (
     apply_refund_mapping,
+    is_on_hold_sst_status,
     is_refund_final_status,
     normalize_refund_header,
     RefundService,
@@ -22,7 +23,131 @@ def test_is_refund_final_status():
     assert is_refund_final_status("Pending") is False
     assert is_refund_final_status("") is False
     assert is_refund_final_status(None) is False
+    assert is_refund_final_status("On hold as per SST team") is False
+    assert is_refund_final_status("Refund on hold as per SST team") is False
+    assert is_on_hold_sst_status("On hold as per SST team") is True
+    assert is_on_hold_sst_status("Refunded") is False
 
+
+def test_on_hold_sst_not_counted_as_refund_applied(tmp_path):
+    from app.config import Settings
+    from app.infrastructure.duckdb_repo import AnalyticsCache, DuckDBRepository
+    from app.services.analytics_service import AnalyticsEngine
+    from app.services.block_payment_service import BlockPaymentService
+
+    settings = Settings(
+        data_dir=str(tmp_path),
+        parquet_dir=str(tmp_path / "parquet"),
+        duckdb_path=str(tmp_path / "analytics.duckdb"),
+        metadata_db_url=f"sqlite:///{tmp_path / 'metadata.db'}",
+    )
+    (tmp_path / "parquet").mkdir(parents=True)
+
+    block_svc = BlockPaymentService(settings=settings)
+    refund_svc = RefundService(settings=settings)
+
+    block_svc.upload_sheet(
+        "payments.csv",
+        b"Email,Phone,CollegeCode,Gender\n"
+        b"a@example.com,9876543210,ADYPU,Male\n"
+        b"b@example.com,9876543211,SSAHE,Female\n",
+    )
+    refund_svc.upload_sheet(
+        "refunds.csv",
+        b"Mail ID,Phone Number,Final Status,Campus\n"
+        b"a@example.com,9876543210,Refunded,ADYPU\n"
+        b"b@example.com,9876543211,On hold as per SST team,SSAHE\n"
+        b"c@example.com,9876543212,Sent to Uni,ADYPU\n"
+        b"d@example.com,9876543213,Processed,SSAHE\n",
+    )
+
+    duck = DuckDBRepository(settings)
+    engine = AnalyticsEngine(duck_repo=duck, cache=AnalyticsCache(ttl_seconds=0))
+    summary = engine._refund_summary()
+
+    assert summary["total_cases"] == 4  # all students on the sheet
+    assert summary["retained_cases"] == 1  # On hold as per SST team
+    assert summary["refunded_cases"] == 1  # Refunded
+    assert summary["refund_cases"] == 1
+    assert summary["refund_processed"] == 2  # Sent to Uni + Processed
+    assert summary["refunds_applied_by_campus"]["ADYPU"] == 2
+    assert summary["refunds_applied_by_campus"]["SSAHE"] == 2
+    assert summary["retained_by_campus"]["SSAHE"] == 1
+    assert summary["retained_by_campus"]["ADYPU"] == 0
+    assert summary["refunded_by_campus"]["ADYPU"] == 1
+    assert summary["refunded_by_campus"]["SSAHE"] == 0
+    assert summary["by_campus"]["ADYPU"] == 1  # Sent to Uni
+    assert summary["by_campus"]["SSAHE"] == 1  # Processed
+
+    chart = engine._overall_refund_by_campus_chart()
+    assert chart is not None
+    chart_by_label = dict(zip(chart.categories, chart.series[0].data))
+    assert chart.series[0].name == "Refund cases"
+    assert chart.series[1].name == "Retained"
+    assert chart.series[2].name == "Refunded"
+    assert chart_by_label.get("SSAHE, Tumkur") == summary["refunds_applied_by_campus"]["SSAHE"]
+    assert chart_by_label.get("ADYPU, Pune") == summary["refunds_applied_by_campus"]["ADYPU"]
+    retained_by_label = dict(zip(chart.categories, chart.series[1].data))
+    assert retained_by_label.get("SSAHE, Tumkur") == summary["retained_by_campus"]["SSAHE"]
+    assert retained_by_label.get("ADYPU, Pune") == summary["retained_by_campus"]["ADYPU"]
+    refunded_by_label = dict(zip(chart.categories, chart.series[2].data))
+    assert refunded_by_label.get("SSAHE, Tumkur") == summary["refunded_by_campus"]["SSAHE"]
+    assert refunded_by_label.get("ADYPU, Pune") == summary["refunded_by_campus"]["ADYPU"]
+    assert sum(chart.series[0].data) == summary["total_cases"]
+
+    # On-hold must not remove the student from active block
+    exclude = engine._refund_exclude_sql("s")
+    adjusted_rows = duck.query_dicts(
+        f"SELECT COUNT(*) AS cnt FROM block_payment_tracking s WHERE 1=1 {exclude}"
+    )
+    assert int(adjusted_rows[0]["cnt"]) == 1  # only a@example.com removed
+
+
+def test_refund_campus_prefers_campus_over_university(tmp_path):
+    """Campus column wins when university points at the other school (no double-count)."""
+    from app.config import Settings
+    from app.infrastructure.duckdb_repo import AnalyticsCache, DuckDBRepository
+    from app.services.analytics_service import AnalyticsEngine
+
+    settings = Settings(
+        data_dir=str(tmp_path),
+        parquet_dir=str(tmp_path / "parquet"),
+        duckdb_path=str(tmp_path / "analytics.duckdb"),
+        metadata_db_url=f"sqlite:///{tmp_path / 'metadata.db'}",
+    )
+    (tmp_path / "parquet").mkdir(parents=True)
+    refund_svc = RefundService(settings=settings)
+    refund_svc.upload_sheet(
+        "refunds.csv",
+        b"Mail ID,Phone Number,Final Status,Campus,University\n"
+        b"a@example.com,9876543210,Refunded,Tumkur,ADYPU\n"
+        b"b@example.com,9876543211,Sent to Uni,Pune,SSAHE\n"
+        b"c@example.com,9876543212,Pending,Tumkur,SSAHE\n",
+    )
+    duck = DuckDBRepository(settings)
+    engine = AnalyticsEngine(duck_repo=duck, cache=AnalyticsCache(ttl_seconds=0))
+    summary = engine._refund_summary()
+
+    assert summary["total_cases"] == 3
+    assert summary["refunds_applied_by_campus"]["SSAHE"] == 2  # Tumkur rows
+    assert summary["refunds_applied_by_campus"]["ADYPU"] == 1  # Pune row
+    assert (
+        summary["refunds_applied_by_campus"]["SSAHE"]
+        + summary["refunds_applied_by_campus"]["ADYPU"]
+        == summary["total_cases"]
+    )
+    assert summary["refunded_by_campus"]["SSAHE"] == 1
+    assert summary["refunded_by_campus"]["ADYPU"] == 0
+    assert summary["by_campus"]["ADYPU"] == 1
+
+    chart = engine._overall_refund_by_campus_chart()
+    assert chart is not None
+    assert len(chart.series) == 3
+    assert sum(chart.series[0].data) == 3
+    assert sum(chart.series[1].data) == 0  # no on-hold rows in this fixture
+    assert sum(chart.series[2].data) == 1
+    assert chart.series[1].name == "Retained"
+    assert chart.series[2].name == "Refunded"
 
 def test_apply_refund_mapping_coalesces_duplicate_headers():
     raw = pl.DataFrame(

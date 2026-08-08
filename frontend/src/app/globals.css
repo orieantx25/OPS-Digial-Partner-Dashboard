@@ -79,3 +79,36 @@ input, select, button {
            focus:border-primary focus:outline-none;
   }
 }
+
+@keyframes analytics-float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translate3d(0, -10px, 0) rotate(8deg);
+    opacity: 0.95;
+  }
+}
+
+@keyframes analytics-float-alt {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+    opacity: 0.4;
+  }
+  50% {
+    transform: translate3d(6px, -8px, 0) rotate(-6deg);
+    opacity: 0.9;
+  }
+}
+
+@layer utilities {
+  .analytics-float {
+    animation: analytics-float 4.2s ease-in-out infinite;
+  }
+  .analytics-float-alt {
+    animation: analytics-float-alt 5.4s ease-in-out infinite;
+  }
+}

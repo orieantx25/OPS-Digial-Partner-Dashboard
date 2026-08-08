@@ -1,5 +1,6 @@
 import {
   AlertItem,
+  BlankCampusRow,
   BlockPaymentBacktracking,
   BlockPaymentSheetStatus,
   CampusBifurcation,
@@ -24,7 +25,9 @@ const API_BASE = '/api/v1';
 
 function getToken(): string | null {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem('dp_token');
+  const token = localStorage.getItem('dp_token');
+  if (!token || token === 'portal' || token === 'static') return null;
+  return token;
 }
 
 function getSyncToken(): string | null {
@@ -197,6 +200,9 @@ const liveApi = {
   getBlockPaymentStatus: () =>
     request<BlockPaymentSheetStatus>('/block-payment/status'),
 
+  getBlankCampusRows: () =>
+    request<{ items: BlankCampusRow[]; total: number }>('/block-payment/blank-campus'),
+
   uploadBlockPaymentSheet: (file: File) => {
     const form = new FormData();
     form.append('file', file);
@@ -207,6 +213,20 @@ const liveApi = {
       uploaded_at: string;
       message: string;
     }>('/block-payment/upload', { method: 'POST', body: form });
+  },
+
+  uploadCampusFillSheet: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<{
+      status: string;
+      updated: number;
+      unmatched: number;
+      still_blank: number;
+      source_filename: string;
+      uploaded_at: string;
+      message: string;
+    }>('/block-payment/campus-fill', { method: 'POST', body: form });
   },
 
   getAlerts: (filters: FilterParams) =>

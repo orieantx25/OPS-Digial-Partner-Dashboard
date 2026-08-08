@@ -37,7 +37,7 @@ NEXT_PUBLIC_SYNC_ADMIN_TOKEN=<same as SYNC_ADMIN_TOKEN>  # for Sync button when 
 
 Change default seeded passwords after first deploy (`admin`, `ops`, etc.) or create new users in the metadata DB.
 
-## Leadership (Vercel static)
+## Leadership / reports portal (Vercel static)
 
 ```env
 NEXT_PUBLIC_DATA_MODE=static
@@ -45,7 +45,20 @@ NEXT_PUBLIC_LEADERSHIP_MODE=true
 NEXT_PUBLIC_ENABLE_UPLOAD=false
 NEXT_PUBLIC_ENABLE_LSQ_SYNC=false
 NEXT_PUBLIC_AUTO_LOGIN=false
+
+# Email-only portal login
+NEXT_PUBLIC_PORTAL_AUTH=true
+PORTAL_AUTH_SECRET=<long-random-string>
+ALLOWED_EMAIL_HASHES=<bcrypt-hashes-comma-separated>
+PORTAL_LOGIN_URL=https://your-portal.vercel.app/login
+NEXT_PUBLIC_LOAN_OPS_URL=https://loan-ops.vercel.app
 ```
+
+- Allowlist: bcrypt hashes only (generate with `node frontend/scripts/hash-allowlist-emails.mjs`).
+- Admins: set `PORTAL_ADMIN_EMAILS` (comma-separated). Those users get upload / sheet-refresh UI when a backend is available; everyone else stays view-only. Static Vercel builds still hide uploads for everyone (no API).
+- No password; **Remember me** uses httpOnly cookie; without it, session is memory-only (re-login on reload).
+- Snapshots served via `/api/snapshots/*` when portal auth is on (not public `/data/snapshots`).
+- Loan Operations: signed handoff — see [`docs/LOAN_OPS_PORTAL_AUTH.md`](LOAN_OPS_PORTAL_AUTH.md).
 
 Published snapshots **strip**:
 

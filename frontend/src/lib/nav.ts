@@ -39,21 +39,22 @@ export { NAV_GROUPS };
 export function pageTitleForPath(pathname: string): string {
   const page = NAV_PAGES.find(
     (p) =>
-      pathname === p.href || (p.href !== '/' && pathname.startsWith(p.href))
+      pathname === p.href ||
+      (p.href !== '/digital-partner' && pathname.startsWith(p.href))
   );
   return page?.label ?? 'Dashboard';
 }
 
 /** Primary bottom-tab routes for leadership mobile. */
 export const MOBILE_BOTTOM_TABS = [
-  { id: 'executive', href: '/', label: 'Overview' },
-  { id: 'funnel', href: '/funnel', label: 'Funnel' },
-  { id: 'partner', href: '/partner', label: 'Partners' },
+  { id: 'executive', href: '/digital-partner', label: 'Overview' },
+  { id: 'funnel', href: '/digital-partner/funnel', label: 'Funnel' },
+  { id: 'partner', href: '/digital-partner/partner', label: 'Partners' },
 ] as const;
 
 /** Quick links for block payment, refunds, and ROI (mobile drawer). */
 export const MOBILE_INSIGHT_LINKS = [
-  { id: 'campus', href: '/campus', label: 'Campus & block KPIs' },
-  { id: 'refund', href: '/refund', label: 'Refund cases & KPIs' },
-  { id: 'revenue', href: '/revenue', label: 'ROI (DP refunds)' },
+  { id: 'campus', href: '/digital-partner/campus', label: 'Campus & block KPIs' },
+  { id: 'refund', href: '/digital-partner/refund', label: 'Refund cases & KPIs' },
+  { id: 'revenue', href: '/digital-partner/revenue', label: 'ROI (DP refunds)' },
 ] as const;

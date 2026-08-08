@@ -22,9 +22,10 @@ export function CampusKpiDashboard({ data }: { data: CampusBifurcation }) {
     SSAHE: 0,
     ADYPU: 0,
   };
+  const refundedByCampus = refund?.refunded_by_campus ?? { SSAHE: 0, ADYPU: 0 };
+  const retainedByCampus = refund?.retained_by_campus ?? { SSAHE: 0, ADYPU: 0 };
   const grossTotal = data.sheet_total ?? 0;
   const activeTotal = data.adjusted_sheet_total ?? grossTotal;
-  const removed = Math.max(0, grossTotal - activeTotal);
   const totalDpBlock =
     data.digital_partner_count ?? data.matched_count ?? data.total_block_paid ?? 0;
 
@@ -37,13 +38,29 @@ export function CampusKpiDashboard({ data }: { data: CampusBifurcation }) {
           {
             label: 'Active block',
             value: activeTotal,
-            sub: removed > 0 ? `${formatNumber(removed)} removed from sheet` : undefined,
-            primary: true,
+            valueClassName: 'text-green-500',
           },
-          { label: 'Total refunds applied', value: refund?.total_cases ?? 0 },
           {
-            label: 'Refund processed',
-            value: refund?.refund_processed ?? refund?.refund_cases ?? 0,
+            label: 'Total refund applied',
+            value: refund?.total_cases ?? 0,
+            sub: 'All students on refund sheet',
+            valueClassName: 'text-white',
+          },
+          {
+            label: 'Retained',
+            value: refund?.retained_cases ?? 0,
+            sub: 'On hold as per SST team',
+            valueClassName: 'text-green-500',
+          },
+          {
+            label: 'Refund request sent to university',
+            value: refund?.refund_processed ?? 0,
+            valueClassName: 'text-yellow-400',
+          },
+          {
+            label: 'Refunded',
+            value: refund?.refunded_cases ?? refund?.refund_cases ?? 0,
+            valueClassName: 'text-red-500',
           },
         ]}
       />
@@ -54,23 +71,53 @@ export function CampusKpiDashboard({ data }: { data: CampusBifurcation }) {
           {
             label: 'SSAHE students (active)',
             value: campusCount(data.adjusted_sheet_by_campus, 'SSAHE'),
-            primary: true,
+            valueClassName: 'text-green-500',
           },
           {
             label: 'ADYPU students (active)',
             value: campusCount(data.adjusted_sheet_by_campus, 'ADYPU'),
-            primary: true,
+            valueClassName: 'text-green-500',
           },
           {
-            label: 'SSAHE refunds applied',
+            label: 'SSAHE refund applied',
             value: refundsAppliedByCampus.SSAHE ?? 0,
+            valueClassName: 'text-white',
           },
           {
-            label: 'ADYPU refunds applied',
+            label: 'ADYPU refund applied',
             value: refundsAppliedByCampus.ADYPU ?? 0,
+            valueClassName: 'text-white',
           },
-          { label: 'SSAHE refund cases', value: refundByCampus.SSAHE ?? 0 },
-          { label: 'ADYPU refund cases', value: refundByCampus.ADYPU ?? 0 },
+          {
+            label: 'SSAHE retained',
+            value: retainedByCampus.SSAHE ?? 0,
+            valueClassName: 'text-green-500',
+          },
+          {
+            label: 'ADYPU retained',
+            value: retainedByCampus.ADYPU ?? 0,
+            valueClassName: 'text-green-500',
+          },
+          {
+            label: 'SSAHE sent to university',
+            value: refundByCampus.SSAHE ?? 0,
+            valueClassName: 'text-yellow-400',
+          },
+          {
+            label: 'ADYPU sent to university',
+            value: refundByCampus.ADYPU ?? 0,
+            valueClassName: 'text-yellow-400',
+          },
+          {
+            label: 'SSAHE refunded',
+            value: refundedByCampus.SSAHE ?? 0,
+            valueClassName: 'text-red-500',
+          },
+          {
+            label: 'ADYPU refunded',
+            value: refundedByCampus.ADYPU ?? 0,
+            valueClassName: 'text-red-500',
+          },
         ]}
       />
 

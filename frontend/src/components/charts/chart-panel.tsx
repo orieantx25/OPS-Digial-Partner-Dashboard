@@ -55,7 +55,12 @@ function gridRightForValueAxis(maxValue: number, compact = false): number {
   return gridMarginForValueLabels(maxValue, compact);
 }
 
-function seriesColor(name: string, index: number): string {
+function seriesColor(
+  name: string,
+  index: number,
+  overrides?: Record<string, string>
+): string {
+  if (overrides?.[name]) return overrides[name];
   if (name === CLASH_SERIES_NAME) return CLASH_SERIES_COLOR;
   if (name === DP_REFUNDS_SERIES_NAME) return DP_REFUNDS_SERIES_COLOR;
   return SERIES_COLORS[index % SERIES_COLORS.length];
@@ -523,8 +528,11 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
         : undefined;
 
       const showBarLabels = !isMobile;
+      const seriesColorOverrides = chart.extra?.series_colors as
+        | Record<string, string>
+        | undefined;
       const barSeries = chart.series.map((s, i) => {
-        const color = seriesColor(s.name, i);
+        const color = seriesColor(s.name, i, seriesColorOverrides);
         const stacked = hasBlockStack && stackNames.has(s.name);
         const isClash = s.name === CLASH_SERIES_NAME;
         const isRefund = s.name === DP_REFUNDS_SERIES_NAME;
@@ -892,10 +900,17 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
           center: ['50%', '46%'],
           minAngle: 3,
           avoidLabelOverlap: true,
-          data: chart.categories.map((c, i) => ({
-            name: c,
-            value: chart.series[0]?.data[i],
-          })),
+          data: chart.categories.map((c, i) => {
+            const sliceColors = chart.extra?.slice_colors as
+              | Record<string, string>
+              | undefined;
+            const color = sliceColors?.[c] ?? SERIES_COLORS[i % SERIES_COLORS.length];
+            return {
+              name: c,
+              value: chart.series[0]?.data[i],
+              itemStyle: { color },
+            };
+          }),
           itemStyle: { borderWidth: 0 },
           label:
             compactDonut && !showSliceLabels

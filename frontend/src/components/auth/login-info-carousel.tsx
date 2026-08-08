@@ -155,6 +155,8 @@ function AnalyticsIconBackdrop() {
   );
 }
 
+export { AnalyticsIconBackdrop };
+
 export function LoginInfoCarousel() {
   return (
     <div className="relative min-h-[420px] lg:min-h-screen bg-[#0F0F10] overflow-hidden">

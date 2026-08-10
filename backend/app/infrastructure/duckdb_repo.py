@@ -61,7 +61,22 @@ class DuckDBRepository:
             # In-memory DB over Parquet — works while uvicorn locks analytics.duckdb.
             conn = duckdb.connect(":memory:")
         else:
-            conn = duckdb.connect(str(self.duckdb_path))
+            try:
+                conn = duckdb.connect(str(self.duckdb_path))
+            except Exception as exc:
+                # Another uvicorn/--reload worker often holds an exclusive lock.
+                # Fall back to in-memory parquet views so analytics still serve.
+                msg = str(exc).lower()
+                if "already open" in msg or "lock" in msg or "cannot open" in msg:
+                    logger.warning(
+                        "duckdb_locked_falling_back_readonly",
+                        path=str(self.duckdb_path),
+                        error=str(exc),
+                    )
+                    self.read_only = True
+                    conn = duckdb.connect(":memory:")
+                else:
+                    raise
         conn.execute("SET threads TO 4")
         conn.execute("SET memory_limit = '4GB'")
         return conn

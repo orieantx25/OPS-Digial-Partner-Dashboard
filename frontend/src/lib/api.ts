@@ -1,10 +1,13 @@
 import {
   AlertItem,
+  AdmissionsSheetStatus,
   BlankCampusRow,
   BlockPaymentBacktracking,
   BlockPaymentSheetStatus,
+  CampusAdmissionsSummary,
   CampusBifurcation,
   ChartData,
+  DpAdmissionsSummary,
   FilterOptions,
   FilterParams,
   KpiMetric,
@@ -12,6 +15,7 @@ import {
   PaginatedResponse,
   PartnerCounsellorClashes,
   PartnerDpRefunds,
+  PartnerMetricTrends,
   PersonaAnalytics,
   RefundCaseRow,
   RefundSheetStatus,
@@ -112,6 +116,17 @@ const liveApi = {
       `/analytics/partner${buildQuery({ ...filtersToQuery(filters), partner })}`
     ),
 
+  getPartnerMetricTrends: (
+    filters: FilterParams,
+    grain: 'daily' | 'weekly' | 'monthly' = 'weekly'
+  ) =>
+    request<PartnerMetricTrends>(
+      `/analytics/partner/trends${buildQuery({
+        ...filtersToQuery(filters),
+        grain,
+      })}`
+    ),
+
   getPartnerCounsellorClashes: (filters: FilterParams) =>
     request<PartnerCounsellorClashes>(
       `/analytics/partner/counsellor-clashes${buildQuery(filtersToQuery(filters))}`
@@ -191,6 +206,31 @@ const liveApi = {
       message: string;
     }>('/refunds/upload', { method: 'POST', body: form });
   },
+
+  getAdmissionsStatus: () => request<AdmissionsSheetStatus>('/admissions/status'),
+
+  uploadAdmissionsSheet: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<{
+      status: string;
+      row_count: number;
+      paid_count: number;
+      source_filename: string;
+      uploaded_at: string;
+      message: string;
+    }>('/admissions/upload', { method: 'POST', body: form });
+  },
+
+  getDpAdmissions: (filters: FilterParams) =>
+    request<DpAdmissionsSummary>(
+      `/analytics/admissions/dp${buildQuery(filtersToQuery(filters))}`
+    ),
+
+  getCampusAdmissions: (filters: FilterParams) =>
+    request<CampusAdmissionsSummary>(
+      `/analytics/admissions/campus${buildQuery(filtersToQuery(filters))}`
+    ),
 
   getBlockPaymentBacktracking: (filters: FilterParams) =>
     request<BlockPaymentBacktracking>(

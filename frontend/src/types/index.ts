@@ -190,6 +190,7 @@ export const DASHBOARD_PAGES = [
   { id: 'geographic', label: 'Geographic', href: '/digital-partner/geographic', group: 'Ops' },
   { id: 'block-payment', label: 'Block Payment', href: '/digital-partner/block-payment', group: 'Ops' },
   { id: 'refund', label: 'Refunds', href: '/digital-partner/refund', group: 'Ops' },
+  { id: 'admissions', label: 'Admissions', href: '/digital-partner/admissions', group: 'Ops' },
   { id: 'campus', label: 'Campus', href: '/digital-partner/campus', group: 'Ops' },
   { id: 'revenue', label: 'ROI', href: '/digital-partner/revenue', group: 'Forecast' },
   { id: 'predictive', label: 'Predictive', href: '/digital-partner/predictive', group: 'Forecast' },
@@ -235,6 +236,20 @@ export interface PartnerDpRefunds {
   total_refunds: number;
   by_partner: { partner: string; count: number }[];
   rows: PartnerDpRefundRow[];
+}
+
+export type PartnerTrendGrain = 'daily' | 'weekly' | 'monthly';
+export type PartnerTrendMetric = 'leads' | 'test_takers' | 'block_amount';
+
+export interface PartnerMetricTrends {
+  grain: PartnerTrendGrain;
+  periods: string[];
+  partners: string[];
+  charts: {
+    leads: ChartData;
+    test_takers: ChartData;
+    block_amount: ChartData;
+  };
 }
 
 export interface PersonaSummary {
@@ -405,6 +420,7 @@ export interface CampusBifurcation {
   refund_summary?: RefundSummary;
   sheet_unassigned_count?: number;
   adjusted_sheet_total?: number;
+  active_block_excluded_count?: number;
   adjusted_sheet_by_campus?: CampusBifurcationRow[];
   adjusted_sheet_by_gender?: CampusGenderRow[];
   adjusted_sheet_campus_chart?: ChartData;
@@ -474,4 +490,97 @@ export interface RefundSheetStatus {
   google_configured: boolean;
   public_csv_configured?: boolean;
   service_account_configured?: boolean;
+}
+
+export interface AdmissionsSheetStatus {
+  has_data: boolean;
+  has_payments?: boolean;
+  has_lms?: boolean;
+  row_count: number;
+  paid_count: number;
+  lms_row_count?: number;
+  verified_count?: number;
+  source_filename?: string | null;
+  lms_source_filename?: string | null;
+  uploaded_at?: string | null;
+  google_configured?: boolean;
+  public_csv_configured?: boolean;
+  service_account_configured?: boolean;
+}
+
+export interface AdmissionsFeeStatus {
+  has_lms: boolean;
+  verified: number;
+  partly_paid: number;
+  under_review: number;
+  rejected: number;
+  total_rows: number;
+  sem1_rows: number;
+  by_status: { status: string; count: number }[];
+  status_chart?: ChartData | null;
+  by_campus_verified?: { campus_code: string; count: number }[];
+}
+
+export interface DpAdmissionRow {
+  sheet_id?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  lead_name?: string | null;
+  partner?: string | null;
+  campus_code?: string | null;
+  semester?: string | null;
+  amount_inr?: string | null;
+  paid_at?: string | null;
+  status?: string | null;
+  order_id?: string | null;
+  payment_id?: string | null;
+}
+
+export interface DpAdmissionsSummary {
+  has_sheet: boolean;
+  total_paid: number;
+  verified_sem1?: number;
+  dp_matched: number;
+  by_partner: { partner: string; count: number }[];
+  partner_chart?: ChartData;
+  fee_status?: AdmissionsFeeStatus;
+  rows: DpAdmissionRow[];
+}
+
+export interface CampusAdmissionRow {
+  sheet_id?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  student_name?: string | null;
+  campus_code?: string | null;
+  semester?: string | null;
+  amount_inr?: string | null;
+  paid_at?: string | null;
+  status?: string | null;
+  order_id?: string | null;
+  payment_id?: string | null;
+  state?: string | null;
+  gender?: string | null;
+  matched_to_block: boolean;
+}
+
+export interface CampusAdmissionsSummary {
+  has_sheet: boolean;
+  total_paid: number;
+  verified_sem1?: number;
+  matched_to_block: number;
+  unmatched_to_block: number;
+  by_campus: {
+    campus_code: string;
+    campus_name: string;
+    count: number;
+    block_paid?: number;
+  }[];
+  by_gender: { gender: string; count: number }[];
+  campus_chart?: ChartData;
+  gender_chart?: ChartData;
+  campus_gender_charts?: CampusGenderChart[];
+  admission_state_summary?: StateSummary[];
+  fee_status?: AdmissionsFeeStatus;
+  rows: CampusAdmissionRow[];
 }

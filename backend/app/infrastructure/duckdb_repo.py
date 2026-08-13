@@ -11,6 +11,14 @@ import duckdb
 
 from app.config import Settings, get_settings
 from app.domain.schema import (
+    ADMISSIONS_COLUMNS,
+    ADMISSIONS_LMS_COLUMNS,
+    ADMISSIONS_LMS_META_FILE,
+    ADMISSIONS_LMS_PARQUET_FILE,
+    ADMISSIONS_LMS_TABLE,
+    ADMISSIONS_META_FILE,
+    ADMISSIONS_PARQUET_FILE,
+    ADMISSIONS_TABLE,
     ALL_COLUMNS,
     BLOCK_PAYMENT_COLUMNS,
     BLOCK_PAYMENT_META_FILE,
@@ -50,9 +58,13 @@ class DuckDBRepository:
         self.persona_activity_meta_path = self.settings.parquet_dir / PERSONA_ACTIVITY_META_FILE
         self.refund_path = self.settings.parquet_dir / REFUND_PARQUET_FILE
         self.refund_meta_path = self.settings.parquet_dir / REFUND_META_FILE
+        self.admissions_path = self.settings.parquet_dir / ADMISSIONS_PARQUET_FILE
+        self.admissions_meta_path = self.settings.parquet_dir / ADMISSIONS_META_FILE
+        self.admissions_lms_path = self.settings.parquet_dir / ADMISSIONS_LMS_PARQUET_FILE
+        self.admissions_lms_meta_path = self.settings.parquet_dir / ADMISSIONS_LMS_META_FILE
         self.duckdb_path = self.settings.duckdb_path
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
-        self._view_stamp: Optional[Tuple[float, float, float, float]] = None
+        self._view_stamp: Optional[Tuple[float, float, float, float, float, float]] = None
         self._row_count_cache: Optional[int] = None
         self._columns_cache: Optional[List[str]] = None
 
@@ -87,12 +99,14 @@ class DuckDBRepository:
         except OSError:
             return 0.0
 
-    def _current_view_stamp(self) -> Tuple[float, float, float, float]:
+    def _current_view_stamp(self) -> Tuple[float, float, float, float, float, float]:
         return (
             self._file_mtime(self.parquet_path),
             self._file_mtime(self.block_payment_path),
             self._file_mtime(self.persona_activity_path),
             self._file_mtime(self.refund_path),
+            self._file_mtime(self.admissions_path),
+            self._file_mtime(self.admissions_lms_path),
         )
 
     def _get_conn(self) -> duckdb.DuckDBPyConnection:
@@ -104,6 +118,8 @@ class DuckDBRepository:
             self.register_block_payment_view(self._conn)
             self.register_persona_activity_view(self._conn)
             self.register_refund_view(self._conn)
+            self.register_admissions_view(self._conn)
+            self.register_admissions_lms_view(self._conn)
             self._view_stamp = stamp
             self._row_count_cache = None
             self._columns_cache = None
@@ -125,6 +141,12 @@ class DuckDBRepository:
 
     def refund_exists(self) -> bool:
         return self.refund_path.exists()
+
+    def admissions_exists(self) -> bool:
+        return self.admissions_path.exists()
+
+    def admissions_lms_exists(self) -> bool:
+        return self.admissions_lms_path.exists()
 
     def _unlink_block_payment_files(self) -> None:
         if self.block_payment_path.exists():
@@ -222,6 +244,55 @@ class DuckDBRepository:
                 parts.append(f"CAST(NULL AS VARCHAR) AS {col}")
         return f"SELECT {', '.join(parts)} WHERE 1=0"
 
+    def _empty_admissions_select_sql(self) -> str:
+        parts: List[str] = []
+        for col in ADMISSIONS_COLUMNS:
+            if col == "is_paid":
+                parts.append(f"CAST(NULL AS BOOLEAN) AS {col}")
+            else:
+                parts.append(f"CAST(NULL AS VARCHAR) AS {col}")
+        return f"SELECT {', '.join(parts)} WHERE 1=0"
+
+    def _empty_admissions_lms_select_sql(self) -> str:
+        parts = [f"CAST(NULL AS VARCHAR) AS {col}" for col in ADMISSIONS_LMS_COLUMNS]
+        return f"SELECT {', '.join(parts)} WHERE 1=0"
+
+    def _parquet_column_names(
+        self, conn: duckdb.DuckDBPyConnection, path: Path
+    ) -> set:
+        try:
+            rows = conn.execute(
+                f"DESCRIBE SELECT * FROM read_parquet('{self._escape_path(path)}')"
+            ).fetchall()
+            return {str(r[0]) for r in rows}
+        except Exception:
+            return set()
+
+    def _select_sql_for_expected_columns(
+        self,
+        path: Path,
+        expected: List[str],
+        existing: set,
+        boolean_cols: Optional[set] = None,
+    ) -> str:
+        """Project parquet to full expected schema; missing cols become NULL."""
+        boolean_cols = boolean_cols or set()
+        parts: List[str] = []
+        for col in expected:
+            if col in existing:
+                if col in boolean_cols:
+                    parts.append(f"CAST({col} AS BOOLEAN) AS {col}")
+                else:
+                    parts.append(f"CAST({col} AS VARCHAR) AS {col}")
+            elif col in boolean_cols:
+                parts.append(f"CAST(NULL AS BOOLEAN) AS {col}")
+            else:
+                parts.append(f"CAST(NULL AS VARCHAR) AS {col}")
+        return (
+            f"SELECT {', '.join(parts)} "
+            f"FROM read_parquet('{self._escape_path(path)}')"
+        )
+
     def register_block_payment_view(self, conn: duckdb.DuckDBPyConnection) -> None:
         if self.block_payment_exists():
             conn.execute(
@@ -256,6 +327,41 @@ class DuckDBRepository:
             conn.execute(
                 f"CREATE OR REPLACE VIEW {REFUND_TABLE} AS "
                 f"{self._empty_refund_select_sql()}"
+            )
+
+    def register_admissions_view(self, conn: duckdb.DuckDBPyConnection) -> None:
+        if self.admissions_exists():
+            existing = self._parquet_column_names(conn, self.admissions_path)
+            select_sql = self._select_sql_for_expected_columns(
+                self.admissions_path,
+                ADMISSIONS_COLUMNS,
+                existing,
+                boolean_cols={"is_paid"},
+            )
+            conn.execute(
+                f"CREATE OR REPLACE VIEW {ADMISSIONS_TABLE} AS {select_sql}"
+            )
+        else:
+            conn.execute(
+                f"CREATE OR REPLACE VIEW {ADMISSIONS_TABLE} AS "
+                f"{self._empty_admissions_select_sql()}"
+            )
+
+    def register_admissions_lms_view(self, conn: duckdb.DuckDBPyConnection) -> None:
+        if self.admissions_lms_exists():
+            existing = self._parquet_column_names(conn, self.admissions_lms_path)
+            select_sql = self._select_sql_for_expected_columns(
+                self.admissions_lms_path,
+                ADMISSIONS_LMS_COLUMNS,
+                existing,
+            )
+            conn.execute(
+                f"CREATE OR REPLACE VIEW {ADMISSIONS_LMS_TABLE} AS {select_sql}"
+            )
+        else:
+            conn.execute(
+                f"CREATE OR REPLACE VIEW {ADMISSIONS_LMS_TABLE} AS "
+                f"{self._empty_admissions_lms_select_sql()}"
             )
 
     def register_master_view(self, conn: duckdb.DuckDBPyConnection) -> None:

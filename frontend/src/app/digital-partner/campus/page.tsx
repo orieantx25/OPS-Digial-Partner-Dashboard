@@ -43,7 +43,8 @@ export default function CampusPage() {
   const refundSummary = data?.refund_summary;
   const grossTotal = data?.sheet_total ?? 0;
   const activeTotal = data?.adjusted_sheet_total ?? grossTotal;
-  const refundCases = refundSummary?.refund_cases ?? 0;
+  const refundCases = refundSummary?.total_cases ?? 0;
+  const retainedCases = refundSummary?.retained_cases ?? 0;
 
   const campusTableRows = useMemo(() => {
     const grossList = data?.sheet_by_campus ?? [];
@@ -118,8 +119,9 @@ export default function CampusPage() {
               subtitle="Active counts after excluding matched refund cases"
             />
             <p className="text-xs text-text-secondary">
-              Total payment {formatNumber(grossTotal)} · Refunds {formatNumber(refundCases)} ·
-              Active {formatNumber(activeTotal)}
+              Total payment {formatNumber(grossTotal)} · Refunds on sheet{' '}
+              {formatNumber(refundCases)} ({formatNumber(retainedCases)} retained) · Active{' '}
+              {formatNumber(activeTotal)}
             </p>
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
               <div className="lg:col-span-4 max-w-md lg:max-w-none">

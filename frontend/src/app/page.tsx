@@ -27,7 +27,7 @@ const DASHBOARDS = [
   },
   {
     id: 'campus-block',
-    title: 'Campus Block Amount',
+    title: 'Campus Admission and Block Dashboard',
     description:
       'Campus block payment bifurcation, refunds, and gender splits.',
     href: '/campus-block',

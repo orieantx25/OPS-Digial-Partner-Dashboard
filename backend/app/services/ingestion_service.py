@@ -19,6 +19,8 @@ from app.domain.models import (
     ValidationIssueType,
 )
 from app.domain.schema import (
+    ADMISSIONS_LMS_PARQUET_FILE,
+    ADMISSIONS_PARQUET_FILE,
     ALL_COLUMNS,
     BOOLEAN_COLUMNS,
     COLUMN_ALIASES,
@@ -107,6 +109,14 @@ def normalize_phone(value: Optional[str]) -> Optional[str]:
         return None
     digits = re.sub(r"\D", "", str(value))
     return digits if digits else None
+
+
+def phone_last10(value: Optional[str]) -> Optional[str]:
+    """Last 10 digits — bridges sheet phones vs LSQ numbers with country code."""
+    digits = normalize_phone(value)
+    if not digits or len(digits) < 10:
+        return None
+    return digits[-10:]
 
 
 def normalize_prospect_id(value: Any) -> Optional[str]:
@@ -1188,6 +1198,223 @@ class IngestionEngine:
             "block_paid_before": before,
             "block_paid_after": after,
             "block_paid_by_partner": by_partner,
+        }
+
+    def _admission_sheet_match_keys(self) -> Tuple[Set[str], Set[str]]:
+        """Emails + last-10 phones from paid All Payments and LMS Verified rows."""
+        emails: Set[str] = set()
+        phones: Set[str] = set()
+
+        payments_path = self.settings.parquet_dir / ADMISSIONS_PARQUET_FILE
+        if payments_path.exists():
+            try:
+                paid = pl.read_parquet(payments_path)
+                if "is_paid" in paid.columns:
+                    paid = paid.filter(pl.col("is_paid").fill_null(False))
+                for row in paid.select(
+                    [c for c in ("match_email", "match_phone", "email", "phone") if c in paid.columns]
+                ).iter_rows(named=True):
+                    em = str(row.get("match_email") or row.get("email") or "").strip().lower()
+                    if em:
+                        emails.add(em)
+                    ph = phone_last10(row.get("match_phone") or row.get("phone"))
+                    if ph:
+                        phones.add(ph)
+            except Exception as exc:
+                logger.warning("admission_payments_keys_failed", error=str(exc))
+
+        lms_path = self.settings.parquet_dir / ADMISSIONS_LMS_PARQUET_FILE
+        if lms_path.exists():
+            try:
+                lms = pl.read_parquet(lms_path)
+                if "status" in lms.columns:
+                    lms = lms.filter(
+                        pl.col("status")
+                        .cast(pl.Utf8)
+                        .str.to_lowercase()
+                        .str.strip_chars()
+                        == "verified"
+                    )
+                for row in lms.select(
+                    [c for c in ("match_email", "match_phone", "email", "phone") if c in lms.columns]
+                ).iter_rows(named=True):
+                    em = str(row.get("match_email") or row.get("email") or "").strip().lower()
+                    if em:
+                        emails.add(em)
+                    ph = phone_last10(row.get("match_phone") or row.get("phone"))
+                    if ph:
+                        phones.add(ph)
+            except Exception as exc:
+                logger.warning("admission_lms_keys_failed", error=str(exc))
+
+        return emails, phones
+
+    def recompute_admission_from_sheets(self) -> Dict[str, Any]:
+        """Mark master DP leads as admission when they match Fee Verification sheets.
+
+        LSQ rarely sets ProspectStage=Admission; Google All Payments (paid) + LMS
+        Verified are the source of truth. Matching is email or last-10 phone.
+        Does not clear existing admission flags. Does not force block_amount_paid.
+        """
+        path = self.settings.parquet_dir / MASTER_PARQUET_FILE
+        emails, phones = self._admission_sheet_match_keys()
+        if not path.exists():
+            return {
+                "updated": False,
+                "row_count": 0,
+                "sheet_emails": len(emails),
+                "sheet_phones": len(phones),
+                "admission_after": 0,
+                "newly_marked": 0,
+                "admission_by_partner": {},
+            }
+        if not emails and not phones:
+            return {
+                "updated": False,
+                "row_count": 0,
+                "sheet_emails": 0,
+                "sheet_phones": 0,
+                "admission_after": 0,
+                "newly_marked": 0,
+                "admission_by_partner": {},
+                "message": "No paid admissions / LMS verified rows to match",
+            }
+
+        df = pl.read_parquet(path)
+        if df.height == 0:
+            return {
+                "updated": False,
+                "row_count": 0,
+                "sheet_emails": len(emails),
+                "sheet_phones": len(phones),
+                "admission_after": 0,
+                "newly_marked": 0,
+                "admission_by_partner": {},
+            }
+
+        before = (
+            int(df.filter(pl.col("admission").fill_null(False)).height)
+            if "admission" in df.columns
+            else 0
+        )
+
+        email_list = sorted(emails)
+        phone_list = sorted(phones)
+        email_norm = (
+            pl.col("email").cast(pl.Utf8).str.to_lowercase().str.strip_chars()
+            if "email" in df.columns
+            else pl.lit(None).cast(pl.Utf8)
+        )
+        phone_norm = (
+            pl.col("phone")
+            .cast(pl.Utf8)
+            .str.replace_all(r"\D", "")
+            .str.slice(-10)
+            if "phone" in df.columns
+            else pl.lit(None).cast(pl.Utf8)
+        )
+        sheet_hit = (
+            email_norm.is_in(email_list) if email_list else pl.lit(False)
+        ) | (
+            (phone_norm.is_in(phone_list) & (phone_norm.str.len_chars() >= 10))
+            if phone_list
+            else pl.lit(False)
+        )
+
+        prior_adm = (
+            pl.col("admission").fill_null(False)
+            if "admission" in df.columns
+            else pl.lit(False)
+        )
+        newly = sheet_hit & ~prior_adm
+        new_adm = prior_adm | sheet_hit
+
+        # Promote funnel for newly sheet-matched rows (Admission is terminal).
+        # Leave block_amount_paid alone — that flag is ProspectStage-only.
+        promote_flags = [
+            c
+            for c in (
+                "connected",
+                "mql",
+                "sql",
+                "application",
+                "test_registration",
+                "interview",
+                "offer_letter",
+                "admission",
+            )
+            if c in df.columns or c == "admission"
+        ]
+        updates: List[pl.Expr] = [new_adm.alias("admission")]
+        for col in promote_flags:
+            if col == "admission":
+                continue
+            if col in df.columns:
+                updates.append(
+                    pl.when(newly)
+                    .then(pl.lit(True))
+                    .otherwise(pl.col(col).fill_null(False))
+                    .alias(col)
+                )
+        if "funnel_stage" in df.columns:
+            updates.append(
+                pl.when(newly)
+                .then(pl.lit("Admission"))
+                .otherwise(pl.col("funnel_stage"))
+                .alias("funnel_stage")
+            )
+
+        df = df.with_columns(updates)
+        after = int(df.filter(pl.col("admission").fill_null(False)).height)
+        newly_marked = after - before
+
+        tmp = path.with_suffix(".tmp.parquet")
+        df.write_parquet(tmp)
+        tmp.replace(path)
+        self.duck_repo.invalidate_metadata_cache()
+        self.cache.invalidate_all()
+        try:
+            self.duck_repo.refresh_materialized_aggregates()
+        except Exception as exc:
+            logger.warning("admission_recompute_mv_refresh_skipped", error=str(exc))
+            self.duck_repo.invalidate_metadata_cache()
+            self.cache.invalidate_all()
+
+        by_partner: Dict[str, int] = {}
+        if "partner" in df.columns:
+            counts = (
+                df.filter(pl.col("admission").fill_null(False))
+                .group_by("partner")
+                .agg(pl.len().alias("n"))
+                .sort("partner")
+            )
+            for row in counts.iter_rows(named=True):
+                partner = str(row["partner"] or "(blank)")
+                if partner in PARTNER_CANONICAL or partner == "(blank)":
+                    by_partner[partner] = int(row["n"])
+                else:
+                    # Still count canonical partners only for the summary; keep all
+                    by_partner[partner] = int(row["n"])
+
+        logger.info(
+            "admission_from_sheets_recomputed",
+            rows=df.height,
+            before=before,
+            after=after,
+            newly_marked=newly_marked,
+            sheet_emails=len(emails),
+            sheet_phones=len(phones),
+            by_partner=by_partner,
+        )
+        return {
+            "updated": True,
+            "row_count": df.height,
+            "sheet_emails": len(emails),
+            "sheet_phones": len(phones),
+            "admission_before": before,
+            "admission_after": after,
+            "newly_marked": newly_marked,
+            "admission_by_partner": by_partner,
         }
 
     def _append_to_master(self, new_data: pl.DataFrame) -> None:

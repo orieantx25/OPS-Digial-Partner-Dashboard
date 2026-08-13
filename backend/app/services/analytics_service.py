@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.domain.models import AlertItem, ChartData, ChartSeries, FilterParams, KpiMetric, PaginatedResponse
 from app.domain.schema import (
+    ADMISSIONS_LMS_TABLE,
+    ADMISSIONS_TABLE,
     BLOCK_PAYMENT_TABLE,
     FUNNEL_STAGES,
     LEAD_CREATED_DATE_COLUMN,
@@ -21,8 +23,10 @@ from app.logging_config import get_logger
 from app.services.empty_defaults import (
     empty_ai_calling,
     empty_alerts,
+    empty_campus_admissions,
     empty_campus_bifurcation,
     empty_chart,
+    empty_dp_admissions,
     empty_executive_charts,
     empty_funnel,
     empty_kpis,
@@ -604,6 +608,181 @@ class AnalyticsEngine:
                 ChartSeries(name="Block Amount Paid", data=[int(r["block_amount"] or 0) for r in rows]),
             ],
         )
+
+    def get_partner_metric_trends(
+        self, filters: FilterParams, grain: str = "weekly"
+    ) -> Dict[str, Any]:
+        """Multi-partner time series for leads / test takers / block amount.
+
+        Top 20 partners by leads (same cap as partner comparison). One series per
+        partner; frontend switches metric client-side without refetch.
+        """
+        if grain not in ("daily", "weekly", "monthly"):
+            grain = "weekly"
+
+        empty_chart = ChartData(
+            chart_id=f"partner_trends_{grain}_leads",
+            chart_type="line",
+            title=f"Partner {grain.title()} Leads",
+            categories=[],
+            series=[],
+        )
+        empty = {
+            "grain": grain,
+            "periods": [],
+            "partners": [],
+            "charts": {
+                "leads": empty_chart,
+                "test_takers": ChartData(
+                    chart_id=f"partner_trends_{grain}_test_takers",
+                    chart_type="line",
+                    title=f"Partner {grain.title()} Test Takers",
+                    categories=[],
+                    series=[],
+                ),
+                "block_amount": ChartData(
+                    chart_id=f"partner_trends_{grain}_block_amount",
+                    chart_type="line",
+                    title=f"Partner {grain.title()} Block Amount",
+                    categories=[],
+                    series=[],
+                ),
+            },
+        }
+        if not self._has_data():
+            return empty
+
+        where, params = self._build_where(filters)
+        available = set(self.duck_repo.get_master_columns())
+        if grain == "weekly":
+            group_col = "week"
+        elif grain == "monthly":
+            group_col = "month"
+        else:
+            group_col = "CAST(date AS DATE)"
+
+        test_expr = (
+            "SUM(CASE WHEN test_registration THEN 1 ELSE 0 END)"
+            if "test_registration" in available
+            else "0"
+        )
+        block_expr = (
+            "SUM(CASE WHEN block_amount_paid THEN 1 ELSE 0 END)"
+            if "block_amount_paid" in available
+            else "0"
+        )
+
+        top_rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT partner, COUNT(*) AS leads
+            FROM {MASTER_DATASET_TABLE}
+            {where}
+            {"AND" if where else "WHERE"} partner IS NOT NULL
+              AND TRIM(CAST(partner AS VARCHAR)) <> ''
+            GROUP BY partner
+            ORDER BY leads DESC
+            LIMIT 20
+            """,
+            params,
+        )
+        partners = [str(r["partner"]) for r in top_rows if r.get("partner")]
+        if not partners:
+            return empty
+
+        placeholders = ", ".join(["?"] * len(partners))
+        query_params = list(params) + partners
+        detail_where = f"{where} {'AND' if where else 'WHERE'} partner IN ({placeholders})"
+
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT partner,
+                   {group_col} AS period,
+                   COUNT(*) AS leads,
+                   {test_expr} AS test_takers,
+                   {block_expr} AS block_amount
+            FROM {MASTER_DATASET_TABLE}
+            {detail_where}
+              AND {group_col} IS NOT NULL
+            GROUP BY partner, {group_col}
+            ORDER BY period, partner
+            """,
+            query_params,
+        )
+
+        periods: List[str] = []
+        seen_periods: set = set()
+        for r in rows:
+            period = str(r["period"])
+            if period not in seen_periods:
+                seen_periods.add(period)
+                periods.append(period)
+
+        # Align values: partner -> period -> metrics
+        by_partner: Dict[str, Dict[str, Dict[str, int]]] = {
+            p: {} for p in partners
+        }
+        for r in rows:
+            partner = str(r["partner"])
+            if partner not in by_partner:
+                continue
+            period = str(r["period"])
+            by_partner[partner][period] = {
+                "leads": int(r["leads"] or 0),
+                "test_takers": int(r["test_takers"] or 0),
+                "block_amount": int(r["block_amount"] or 0),
+            }
+
+        def series_for(metric: str) -> List[ChartSeries]:
+            return [
+                ChartSeries(
+                    name=p,
+                    data=[
+                        by_partner[p].get(period, {}).get(metric, 0) for period in periods
+                    ],
+                )
+                for p in partners
+            ]
+
+        grain_label = grain.title()
+        trend_extra = {
+            "hide_point_labels": True,
+            "smooth": True,
+            "sparse_line": True,
+            "preselect_top": 3,
+            "axis_label_auto": True,
+        }
+        charts = {
+            "leads": ChartData(
+                chart_id=f"partner_trends_{grain}_leads",
+                chart_type="line",
+                title=f"Partner {grain_label} Leads",
+                categories=periods,
+                series=series_for("leads"),
+                extra=dict(trend_extra),
+            ),
+            "test_takers": ChartData(
+                chart_id=f"partner_trends_{grain}_test_takers",
+                chart_type="line",
+                title=f"Partner {grain_label} Test Takers",
+                categories=periods,
+                series=series_for("test_takers"),
+                extra=dict(trend_extra),
+            ),
+            "block_amount": ChartData(
+                chart_id=f"partner_trends_{grain}_block_amount",
+                chart_type="line",
+                title=f"Partner {grain_label} Block Amount",
+                categories=periods,
+                series=series_for("block_amount"),
+                extra=dict(trend_extra),
+            ),
+        }
+        return {
+            "grain": grain,
+            "periods": periods,
+            "partners": partners,
+            "charts": charts,
+        }
 
     def get_partner_comparison(self, filters: FilterParams) -> ChartData:
         where, params = self._build_where(filters)
@@ -2095,16 +2274,20 @@ class AnalyticsEngine:
         """Refund applied = marked is_refund and not on-hold SST."""
         return f"({alias}.is_refund AND NOT {self._refund_on_hold_sql(alias)})"
 
+    def _refund_reduces_active_block_sql(self, alias: str = "r") -> str:
+        """Refund sheet row reduces active block when matched (retained on-hold SST excluded)."""
+        return f"NOT {self._refund_on_hold_sql(alias)}"
+
     def _refund_exclude_sql(self, table_alias: str) -> str:
-        """Exclude block-payment rows that match any applied refund record."""
+        """Exclude block-payment rows that match any non-retained refund record."""
         if not self.duck_repo.refund_exists():
             return ""
         prefix = f"{table_alias}."
-        applied = self._refund_applied_sql("r")
+        reduces_active = self._refund_reduces_active_block_sql("r")
         return f"""
             AND NOT EXISTS (
                 SELECT 1 FROM {REFUND_TABLE} r
-                WHERE {applied}
+                WHERE {reduces_active}
                   AND (
                     (r.match_email IS NOT NULL AND {prefix}match_email IS NOT NULL
                      AND r.match_email = {prefix}match_email)
@@ -3730,6 +3913,649 @@ class AnalyticsEngine:
             "by_original_utm_campaign": top("original_utm_campaign"),
         }
 
+    def _admissions_campus_bucket_sql(self, alias: str = "a") -> str:
+        """Mutually exclusive campus bucket from admissions CampusCode."""
+        code = f"UPPER(TRIM(COALESCE({alias}.campus_code, '')))"
+        return (
+            "CASE "
+            f"WHEN {code} LIKE '%SSAHE%' OR {code} LIKE '%TUMKUR%' THEN 'SSAHE' "
+            f"WHEN {code} LIKE '%ADYPU%' OR {code} LIKE '%PUNE%' THEN 'ADYPU' "
+            f"WHEN {code} = '' OR {code} IS NULL THEN '(blank)' "
+            f"ELSE COALESCE(NULLIF(TRIM(CAST({alias}.campus_code AS VARCHAR)), ''), '(blank)') END"
+        )
+
+    def _admissions_dp_master_match_sql(self, alias: str = "a") -> str:
+        """Admission email/phone matches a digital-partner lead in master."""
+        partners = self._canonical_partner_sql_list()
+        return f"""
+            EXISTS (
+                SELECT 1 FROM {MASTER_DATASET_TABLE} m
+                WHERE m.partner IN ({partners})
+                  AND (
+                    ({alias}.match_email IS NOT NULL
+                     AND LOWER(TRIM(COALESCE(m.email, ''))) = {alias}.match_email)
+                    OR (
+                        {alias}.match_phone IS NOT NULL
+                        AND LENGTH({alias}.match_phone) >= 10
+                        AND RIGHT(
+                            regexp_replace(
+                                COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'
+                            ),
+                            10
+                        ) = RIGHT({alias}.match_phone, 10)
+                    )
+                  )
+            )
+        """
+
+    def _admissions_block_join_sql(self, alias: str = "a") -> str:
+        """Left-join block payment attributes (state/gender) on email or phone."""
+        if not self.duck_repo.block_payment_exists():
+            return ""
+        return f"""
+            LEFT JOIN (
+                SELECT
+                    match_email,
+                    match_phone,
+                    ANY_VALUE(NULLIF(TRIM(CAST(state AS VARCHAR)), '')) AS state,
+                    ANY_VALUE(NULLIF(TRIM(CAST(gender AS VARCHAR)), '')) AS gender
+                FROM {BLOCK_PAYMENT_TABLE}
+                WHERE match_email IS NOT NULL OR match_phone IS NOT NULL
+                GROUP BY match_email, match_phone
+            ) b ON (
+                ({alias}.match_email IS NOT NULL AND b.match_email IS NOT NULL
+                 AND {alias}.match_email = b.match_email)
+                OR ({alias}.match_phone IS NOT NULL AND b.match_phone IS NOT NULL
+                    AND {alias}.match_phone = b.match_phone
+                    AND LENGTH({alias}.match_phone) >= 10)
+            )
+        """
+
+    def _lms_fee_status_summary(self) -> Dict[str, Any]:
+        """LMS fee verification KPIs — Sem1 rows; paid admissions = Verified only."""
+        empty = {
+            "has_lms": False,
+            "verified": 0,
+            "partly_paid": 0,
+            "under_review": 0,
+            "rejected": 0,
+            "total_rows": 0,
+            "sem1_rows": 0,
+            "by_status": [],
+            "status_chart": ChartData(
+                chart_id="admissions_lms_fee_status",
+                chart_type="donut",
+                title="LMS fee status (Sem 1)",
+                categories=[],
+                series=[],
+                extra={
+                    "center_total": 0,
+                    "center_label": "Sem1",
+                    "compact_donut": True,
+                    "show_slice_labels": True,
+                },
+            ),
+            "by_campus_verified": [],
+        }
+        if not self.duck_repo.admissions_lms_exists():
+            return empty
+
+        sem1 = (
+            "(TRIM(COALESCE(CAST(semester AS VARCHAR), '')) IN ('1', '1.0', 'Sem 1', 'Semester 1', '') "
+            "OR LOWER(TRIM(COALESCE(CAST(semester AS VARCHAR), ''))) LIKE '%sem%1%' "
+            "OR LOWER(TRIM(COALESCE(CAST(semester AS VARCHAR), ''))) = 'i')"
+        )
+        status_expr = "LOWER(TRIM(COALESCE(status, '')))"
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                COUNT(*) AS total_rows,
+                SUM(CASE WHEN {sem1} THEN 1 ELSE 0 END) AS sem1_rows,
+                SUM(CASE WHEN {sem1} AND {status_expr} = 'verified' THEN 1 ELSE 0 END) AS verified,
+                SUM(
+                    CASE WHEN {sem1} AND (
+                        {status_expr} = 'partly paid' OR {status_expr} LIKE '%partly%'
+                    ) THEN 1 ELSE 0 END
+                ) AS partly_paid,
+                SUM(
+                    CASE WHEN {sem1} AND (
+                        {status_expr} = 'under review' OR {status_expr} LIKE '%under review%'
+                    ) THEN 1 ELSE 0 END
+                ) AS under_review,
+                SUM(
+                    CASE WHEN {sem1} AND {status_expr} = 'rejected' THEN 1 ELSE 0 END
+                ) AS rejected
+            FROM {ADMISSIONS_LMS_TABLE}
+            """
+        )
+        row = rows[0] if rows else {}
+        verified = int(row.get("verified") or 0)
+        partly = int(row.get("partly_paid") or 0)
+        under = int(row.get("under_review") or 0)
+        rejected = int(row.get("rejected") or 0)
+        by_status = [
+            {"status": "Verified", "count": verified},
+            {"status": "Partly paid", "count": partly},
+            {"status": "Under review", "count": under},
+            {"status": "Rejected", "count": rejected},
+        ]
+        status_chart = ChartData(
+            chart_id="admissions_lms_fee_status",
+            chart_type="donut",
+            title="LMS fee status (Sem 1)",
+            categories=[s["status"] for s in by_status if s["count"] > 0],
+            series=[
+                ChartSeries(
+                    name="Students",
+                    data=[s["count"] for s in by_status if s["count"] > 0],
+                )
+            ],
+            extra={
+                "center_total": verified,
+                "center_label": "Verified",
+                "compact_donut": True,
+                "show_slice_labels": True,
+            },
+        )
+
+        campus_expr = (
+            "CASE "
+            "WHEN UPPER(TRIM(COALESCE(campus, ''))) LIKE '%SSAHE%' "
+            "OR UPPER(TRIM(COALESCE(campus, ''))) LIKE '%TUMKUR%' THEN 'SSAHE' "
+            "WHEN UPPER(TRIM(COALESCE(campus, ''))) LIKE '%ADYPU%' "
+            "OR UPPER(TRIM(COALESCE(campus, ''))) LIKE '%PUNE%' THEN 'ADYPU' "
+            "ELSE COALESCE(NULLIF(TRIM(CAST(campus AS VARCHAR)), ''), '(blank)') END"
+        )
+        campus_rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                ({campus_expr}) AS campus_code,
+                COUNT(*) AS count
+            FROM {ADMISSIONS_LMS_TABLE}
+            WHERE {sem1} AND {status_expr} = 'verified'
+            GROUP BY 1
+            ORDER BY count DESC
+            """
+        )
+        by_campus_verified = [
+            {
+                "campus_code": str(r.get("campus_code") or "(blank)"),
+                "count": int(r.get("count") or 0),
+            }
+            for r in campus_rows
+        ]
+
+        return {
+            "has_lms": True,
+            "verified": verified,
+            "partly_paid": partly,
+            "under_review": under,
+            "rejected": rejected,
+            "total_rows": int(row.get("total_rows") or 0),
+            "sem1_rows": int(row.get("sem1_rows") or 0),
+            "by_status": by_status,
+            "status_chart": status_chart,
+            "by_campus_verified": by_campus_verified,
+        }
+
+    def get_dp_admissions(self, filters: FilterParams) -> Dict[str, Any]:
+        """Paid admissions whose email/phone matches a digital-partner LSQ lead."""
+        empty = empty_dp_admissions()
+        if not self.duck_repo.admissions_exists():
+            return empty
+
+        total_paid_rows = self.duck_repo.query_dicts(
+            f"SELECT COUNT(*) AS cnt FROM {ADMISSIONS_TABLE} WHERE is_paid"
+        )
+        total_paid = int(total_paid_rows[0]["cnt"]) if total_paid_rows else 0
+        fee_status = self._lms_fee_status_summary()
+        if not self._has_data():
+            return {
+                **empty,
+                "has_sheet": True,
+                "total_paid": total_paid,
+                "fee_status": fee_status,
+                "verified_sem1": fee_status.get("verified", 0),
+            }
+
+        partners = self._canonical_partner_sql_list()
+        dp_match = self._admissions_dp_master_match_sql("a")
+        by_partner_rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                COALESCE(NULLIF(TRIM(CAST(m.partner AS VARCHAR)), ''), '(blank)') AS partner,
+                COUNT(DISTINCT COALESCE(a.sheet_id, a.email, a.match_phone)) AS count
+            FROM {ADMISSIONS_TABLE} a
+            INNER JOIN {MASTER_DATASET_TABLE} m
+              ON m.partner IN ({partners})
+             AND (
+                (a.match_email IS NOT NULL
+                 AND LOWER(TRIM(COALESCE(m.email, ''))) = a.match_email)
+                OR (
+                    a.match_phone IS NOT NULL
+                    AND LENGTH(a.match_phone) >= 10
+                    AND RIGHT(
+                        regexp_replace(
+                            COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'
+                        ),
+                        10
+                    ) = RIGHT(a.match_phone, 10)
+                )
+             )
+            WHERE a.is_paid
+            GROUP BY 1
+            ORDER BY count DESC
+            """
+        )
+        by_partner = [
+            {"partner": str(r.get("partner") or "(blank)"), "count": int(r.get("count") or 0)}
+            for r in by_partner_rows
+        ]
+        dp_matched = sum(p["count"] for p in by_partner)
+
+        partner_chart = ChartData(
+            chart_id="dp_admissions_by_partner",
+            chart_type="bar",
+            title="DP admissions by partner",
+            categories=[p["partner"] for p in by_partner[:20]],
+            series=[
+                ChartSeries(
+                    name="Admissions",
+                    data=[p["count"] for p in by_partner[:20]],
+                )
+            ],
+        )
+
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                a.sheet_id,
+                a.email,
+                a.phone AS sheet_phone,
+                a.student_name,
+                a.campus_code,
+                a.semester,
+                a.amount_inr,
+                a.paid_at,
+                a.status,
+                a.order_id,
+                a.payment_id,
+                COALESCE(NULLIF(TRIM(CAST(m.partner AS VARCHAR)), ''), '(blank)') AS partner,
+                m.phone AS phone,
+                m.name AS lead_name
+            FROM {ADMISSIONS_TABLE} a
+            INNER JOIN {MASTER_DATASET_TABLE} m
+              ON m.partner IN ({partners})
+             AND (
+                (a.match_email IS NOT NULL
+                 AND LOWER(TRIM(COALESCE(m.email, ''))) = a.match_email)
+                OR (
+                    a.match_phone IS NOT NULL
+                    AND LENGTH(a.match_phone) >= 10
+                    AND RIGHT(
+                        regexp_replace(
+                            COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'
+                        ),
+                        10
+                    ) = RIGHT(a.match_phone, 10)
+                )
+             )
+            WHERE a.is_paid AND ({dp_match})
+            ORDER BY a.paid_at DESC NULLS LAST, a.email
+            LIMIT 500
+            """
+        )
+        seen: set = set()
+        out_rows: List[Dict[str, Any]] = []
+        for r in rows:
+            key = str(r.get("sheet_id") or r.get("email") or r.get("sheet_phone") or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            out_rows.append(
+                {
+                    "sheet_id": r.get("sheet_id"),
+                    "email": r.get("email"),
+                    "phone": r.get("phone") or r.get("sheet_phone"),
+                    "lead_name": r.get("lead_name") or r.get("student_name"),
+                    "partner": r.get("partner"),
+                    "campus_code": r.get("campus_code"),
+                    "semester": r.get("semester"),
+                    "amount_inr": r.get("amount_inr"),
+                    "paid_at": r.get("paid_at"),
+                    "status": r.get("status"),
+                    "order_id": r.get("order_id"),
+                    "payment_id": r.get("payment_id"),
+                }
+            )
+
+        return {
+            "has_sheet": True,
+            "total_paid": total_paid,
+            "verified_sem1": fee_status.get("verified", 0),
+            "dp_matched": dp_matched,
+            "by_partner": by_partner,
+            "partner_chart": partner_chart,
+            "fee_status": fee_status,
+            "rows": out_rows,
+        }
+
+    def get_campus_admissions(self, filters: FilterParams) -> Dict[str, Any]:
+        """All paid admissions; enrich region/gender from block payment via email/phone."""
+        empty = empty_campus_admissions()
+        fee_status = self._lms_fee_status_summary()
+        has_payments = self.duck_repo.admissions_exists()
+        if not has_payments and not fee_status.get("has_lms"):
+            return empty
+
+        if not has_payments:
+            return {
+                **empty,
+                "has_sheet": True,
+                "verified_sem1": fee_status.get("verified", 0),
+                "fee_status": fee_status,
+            }
+
+        campus_bucket = self._admissions_campus_bucket_sql("a")
+        block_join = self._admissions_block_join_sql("a")
+
+        if block_join:
+            summary_rows = self.duck_repo.query_dicts(
+                f"""
+                SELECT
+                    COUNT(*) AS total_paid,
+                    SUM(
+                        CASE WHEN b.state IS NOT NULL OR b.gender IS NOT NULL THEN 1 ELSE 0 END
+                    ) AS matched_to_block
+                FROM {ADMISSIONS_TABLE} a
+                {block_join}
+                WHERE a.is_paid
+                """
+            )
+        else:
+            summary_rows = self.duck_repo.query_dicts(
+                f"""
+                SELECT COUNT(*) AS total_paid, 0 AS matched_to_block
+                FROM {ADMISSIONS_TABLE} a
+                WHERE a.is_paid
+                """
+            )
+        summary = summary_rows[0] if summary_rows else {}
+        total_paid = int(summary.get("total_paid") or 0)
+        matched_to_block = int(summary.get("matched_to_block") or 0)
+        unmatched_to_block = max(0, total_paid - matched_to_block)
+        verified_sem1 = int(fee_status.get("verified") or 0)
+
+        by_campus_rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT
+                ({campus_bucket}) AS campus_code,
+                COUNT(*) AS count
+            FROM {ADMISSIONS_TABLE} a
+            WHERE a.is_paid
+            GROUP BY 1
+            ORDER BY count DESC
+            """
+        )
+        by_campus = [
+            {
+                "campus_code": str(r.get("campus_code") or "(blank)"),
+                "campus_name": self._campus_display_label(
+                    str(r.get("campus_code") or "(blank)"),
+                    str(r.get("campus_code") or "(blank)"),
+                ),
+                "count": int(r.get("count") or 0),
+                "block_paid": int(r.get("count") or 0),
+            }
+            for r in by_campus_rows
+        ]
+
+        campus_gender_charts: List[Dict[str, Any]] = []
+        slice_extra = {
+            "center_label": "Paid",
+            "compact_donut": True,
+            "show_slice_labels": True,
+        }
+
+        if block_join:
+            by_gender_rows = self.duck_repo.query_dicts(
+                f"""
+                SELECT
+                    COALESCE(NULLIF(TRIM(CAST(b.gender AS VARCHAR)), ''), '(blank)') AS gender,
+                    COUNT(*) AS count
+                FROM {ADMISSIONS_TABLE} a
+                {block_join}
+                WHERE a.is_paid
+                GROUP BY 1
+                ORDER BY count DESC
+                """
+            )
+            state_rows = self.duck_repo.query_dicts(
+                f"""
+                SELECT
+                    COALESCE(NULLIF(TRIM(CAST(b.state AS VARCHAR)), ''), '(blank)') AS state,
+                    COUNT(*) AS leads
+                FROM {ADMISSIONS_TABLE} a
+                {block_join}
+                WHERE a.is_paid
+                  AND COALESCE(NULLIF(TRIM(CAST(b.state AS VARCHAR)), ''), '(blank)') <> '(blank)'
+                GROUP BY 1
+                ORDER BY leads DESC
+                """
+            )
+            detail_rows = self.duck_repo.query_dicts(
+                f"""
+                SELECT
+                    a.sheet_id,
+                    a.email,
+                    a.phone,
+                    a.student_name,
+                    a.campus_code,
+                    a.semester,
+                    a.amount_inr,
+                    a.paid_at,
+                    a.status,
+                    a.order_id,
+                    a.payment_id,
+                    b.state,
+                    b.gender,
+                    CASE WHEN b.state IS NOT NULL OR b.gender IS NOT NULL THEN TRUE ELSE FALSE END
+                        AS matched_to_block
+                FROM {ADMISSIONS_TABLE} a
+                {block_join}
+                WHERE a.is_paid
+                ORDER BY a.paid_at DESC NULLS LAST, a.email
+                LIMIT 500
+                """
+            )
+            campus_gender_rows = self.duck_repo.query_dicts(
+                f"""
+                SELECT
+                    ({campus_bucket}) AS campus_code,
+                    COALESCE(NULLIF(TRIM(CAST(b.gender AS VARCHAR)), ''), '(blank)') AS gender,
+                    COUNT(*) AS count
+                FROM {ADMISSIONS_TABLE} a
+                {block_join}
+                WHERE a.is_paid
+                GROUP BY 1, 2
+                ORDER BY 1, count DESC
+                """
+            )
+            campus_gender_map: Dict[str, Dict[str, Any]] = {}
+            for r in campus_gender_rows:
+                code = str(r.get("campus_code") or "(blank)")
+                gender = str(r.get("gender") or "(blank)")
+                cnt = int(r.get("count") or 0)
+                if code not in campus_gender_map:
+                    label = self._campus_display_label(code, code)
+                    if code == "SSAHE":
+                        label = "SSAHE, Tumkur"
+                    elif code == "ADYPU":
+                        label = "ADYPU, Pune"
+                    campus_gender_map[code] = {
+                        "campus_code": code,
+                        "campus_name": label,
+                        "block_paid": 0,
+                        "by_gender": [],
+                    }
+                campus_gender_map[code]["block_paid"] += cnt
+                campus_gender_map[code]["by_gender"].append({"gender": gender, "count": cnt})
+
+            for campus in sorted(
+                campus_gender_map.values(),
+                key=lambda x: int(x.get("block_paid") or 0),
+                reverse=True,
+            ):
+                code = str(campus.get("campus_code") or "(blank)")
+                genders = campus.get("by_gender") or []
+                if not genders:
+                    continue
+                slug = re.sub(
+                    r"[^\w\-]+",
+                    "_",
+                    str(campus.get("campus_code") or "campus").strip(),
+                    flags=re.UNICODE,
+                ).strip("_") or "campus"
+                name = str(campus.get("campus_name") or code)
+                total = int(campus.get("block_paid") or 0)
+                campus_gender_charts.append({
+                    "campus_code": code,
+                    "campus_name": name,
+                    "block_paid": total,
+                    "gender_chart": ChartData(
+                        chart_id=f"campus_admissions_gender_{slug}",
+                        chart_type="donut",
+                        title=name[:80],
+                        categories=[g["gender"] for g in genders],
+                        series=[
+                            ChartSeries(
+                                name="Admissions",
+                                data=[g["count"] for g in genders],
+                            )
+                        ],
+                        extra={**slice_extra, "center_total": total},
+                    ),
+                })
+        else:
+            by_gender_rows = []
+            state_rows = []
+            detail_rows = self.duck_repo.query_dicts(
+                f"""
+                SELECT
+                    a.sheet_id,
+                    a.email,
+                    a.phone,
+                    a.student_name,
+                    a.campus_code,
+                    a.semester,
+                    a.amount_inr,
+                    a.paid_at,
+                    a.status,
+                    a.order_id,
+                    a.payment_id,
+                    NULL AS state,
+                    NULL AS gender,
+                    FALSE AS matched_to_block
+                FROM {ADMISSIONS_TABLE} a
+                WHERE a.is_paid
+                ORDER BY a.paid_at DESC NULLS LAST, a.email
+                LIMIT 500
+                """
+            )
+
+        by_gender = [
+            {"gender": str(r.get("gender") or "(blank)"), "count": int(r.get("count") or 0)}
+            for r in by_gender_rows
+        ]
+        admission_state_summary = [
+            {
+                "state": str(r["state"]),
+                "leads": int(r["leads"] or 0),
+                "admissions": int(r["leads"] or 0),
+                "block_amount_paid": int(r["leads"] or 0),
+                "stages": {"Admissions": int(r["leads"] or 0)},
+            }
+            for r in state_rows
+            if r.get("state")
+        ]
+
+        campus_labels = [
+            (
+                "SSAHE, Tumkur"
+                if c["campus_code"] == "SSAHE"
+                else "ADYPU, Pune"
+                if c["campus_code"] == "ADYPU"
+                else c["campus_name"]
+            )
+            for c in by_campus
+        ]
+        campus_chart = ChartData(
+            chart_id="campus_admissions_by_campus",
+            chart_type="bar",
+            title="Admissions by campus",
+            categories=campus_labels[:20],
+            series=[
+                ChartSeries(
+                    name="Admissions",
+                    data=[c["count"] for c in by_campus[:20]],
+                )
+            ],
+        )
+        gender_chart = ChartData(
+            chart_id="campus_admissions_by_gender",
+            chart_type="donut",
+            title="Admissions by gender (from block match)",
+            categories=[g["gender"] for g in by_gender],
+            series=[
+                ChartSeries(
+                    name="Admissions",
+                    data=[g["count"] for g in by_gender],
+                )
+            ],
+            extra={
+                "center_total": verified_sem1 if fee_status.get("has_lms") else total_paid,
+                "center_label": "Verified" if fee_status.get("has_lms") else "Paid",
+                "compact_donut": True,
+                "show_slice_labels": True,
+            },
+        )
+
+        rows = [
+            {
+                "sheet_id": r.get("sheet_id"),
+                "email": r.get("email"),
+                "phone": r.get("phone"),
+                "student_name": r.get("student_name"),
+                "campus_code": r.get("campus_code"),
+                "semester": r.get("semester"),
+                "amount_inr": r.get("amount_inr"),
+                "paid_at": r.get("paid_at"),
+                "status": r.get("status"),
+                "order_id": r.get("order_id"),
+                "payment_id": r.get("payment_id"),
+                "state": r.get("state"),
+                "gender": r.get("gender"),
+                "matched_to_block": bool(r.get("matched_to_block")),
+            }
+            for r in detail_rows
+        ]
+
+        return {
+            "has_sheet": True,
+            "total_paid": total_paid,
+            "verified_sem1": verified_sem1,
+            "matched_to_block": matched_to_block,
+            "unmatched_to_block": unmatched_to_block,
+            "by_campus": by_campus,
+            "by_gender": by_gender,
+            "campus_chart": campus_chart,
+            "gender_chart": gender_chart,
+            "campus_gender_charts": campus_gender_charts,
+            "admission_state_summary": admission_state_summary,
+            "fee_status": fee_status,
+            "rows": rows,
+        }
+
     def get_campus_bifurcation(self, filters: FilterParams) -> Dict[str, Any]:
         """Block amount paid by campus and gender (matched payment sheet rows only)."""
         empty = empty_campus_bifurcation()
@@ -4162,6 +4988,7 @@ class AnalyticsEngine:
             "refund_summary": refund_summary,
             "sheet_unassigned_count": sheet_unassigned_count,
             "adjusted_sheet_total": adjusted_sheet_total,
+            "active_block_excluded_count": max(0, sheet_total - adjusted_sheet_total),
             "adjusted_sheet_by_campus": adjusted_bundle.get("by_campus", []),
             "adjusted_sheet_by_gender": adjusted_bundle.get("by_gender", []),
             "adjusted_sheet_campus_chart": adjusted_bundle.get("campus_chart"),

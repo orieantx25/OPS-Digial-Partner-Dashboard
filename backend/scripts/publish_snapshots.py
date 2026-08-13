@@ -36,6 +36,7 @@ from app.services.analytics_service import AnalyticsEngine  # noqa: E402
 from app.services.block_payment_service import BlockPaymentService  # noqa: E402
 from app.services.persona_activity_service import PersonaActivityService  # noqa: E402
 from app.services.refund_service import RefundService  # noqa: E402
+from app.services.admissions_service import AdmissionsService  # noqa: E402
 
 OUT_DIR = REPO_ROOT / "frontend" / "public" / "data" / "snapshots"
 
@@ -166,6 +167,17 @@ def _strip_block_payment_backtracking(payload: Any) -> Dict[str, Any]:
     }
 
 
+def _strip_admissions(payload: Any) -> Dict[str, Any]:
+    """Leadership snapshots: KPIs/charts only — no student email/phone rows."""
+    data = _payload_dict(payload)
+    if not data:
+        return payload if isinstance(payload, dict) else {}
+    return {
+        **data,
+        "rows": [],
+    }
+
+
 def _write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -209,6 +221,7 @@ def publish() -> Path:
     block_svc = BlockPaymentService(duck_repo=duck)
     persona_svc = PersonaActivityService(duck_repo=duck)
     refund_svc = RefundService(duck_repo=duck)
+    admissions_svc = AdmissionsService(duck_repo=duck)
 
     scopes = _resolve_scopes()
     published_at = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -221,6 +234,7 @@ def publish() -> Path:
     _write_json(OUT_DIR / "filters.json", engine.get_filter_options())
     _write_json(OUT_DIR / "block_payment_status.json", block_svc.get_status())
     _write_json(OUT_DIR / "refund_status.json", refund_svc.get_status())
+    _write_json(OUT_DIR / "admissions_status.json", admissions_svc.get_status())
     _write_json(OUT_DIR / "persona_activity_status.json", persona_svc.get_status())
 
     for scope_id, scope in scopes.items():
@@ -249,6 +263,8 @@ def publish() -> Path:
             ("revenue", engine.get_revenue_dashboard(filters)),
             ("predictive", engine.get_predictive_analytics(filters)),
             ("campus_bifurcation", engine.get_campus_bifurcation(filters)),
+            ("admissions_dp", _strip_admissions(engine.get_dp_admissions(filters))),
+            ("admissions_campus", _strip_admissions(engine.get_campus_admissions(filters))),
             (
                 "refund_cases",
                 _strip_refund_cases(
@@ -276,6 +292,18 @@ def publish() -> Path:
             (
                 "partner_dp_refunds",
                 _strip_clashes_list(engine.get_partner_dp_refunds(filters)),
+            ),
+            (
+                "partner_trends_daily",
+                engine.get_partner_metric_trends(filters, grain="daily"),
+            ),
+            (
+                "partner_trends_weekly",
+                engine.get_partner_metric_trends(filters, grain="weekly"),
+            ),
+            (
+                "partner_trends_monthly",
+                engine.get_partner_metric_trends(filters, grain="monthly"),
             ),
         ]
 
@@ -307,6 +335,7 @@ def publish() -> Path:
             "filters.json",
             "block_payment_status.json",
             "refund_status.json",
+            "admissions_status.json",
             "persona_activity_status.json",
         ],
     }

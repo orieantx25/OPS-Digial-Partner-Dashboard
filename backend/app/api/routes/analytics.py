@@ -64,6 +64,15 @@ async def partner_analytics(
     return engine.get_partner_comparison(filters)
 
 
+@router.get("/partner/trends")
+async def partner_metric_trends(
+    filters: FilterParams = Depends(parse_filters),
+    grain: str = Query("weekly", pattern="^(daily|weekly|monthly)$"),
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    return engine.get_partner_metric_trends(filters, grain=grain)
+
+
 @router.get("/partner/counsellor-clashes")
 async def partner_counsellor_clashes(
     filters: FilterParams = Depends(parse_filters),
@@ -208,6 +217,22 @@ async def campus_bifurcation(
     engine: AnalyticsEngine = Depends(get_analytics_engine),
 ):
     return engine.get_campus_bifurcation(filters)
+
+
+@router.get("/admissions/dp")
+async def admissions_dp(
+    filters: FilterParams = Depends(parse_filters),
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    return engine.get_dp_admissions(filters)
+
+
+@router.get("/admissions/campus")
+async def admissions_campus(
+    filters: FilterParams = Depends(parse_filters),
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    return engine.get_campus_admissions(filters)
 
 
 @router.get("/anomalies")

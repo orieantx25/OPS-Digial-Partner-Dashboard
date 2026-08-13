@@ -48,6 +48,16 @@ class Settings(BaseSettings):
     google_refund_public_csv_url: str = ""
     google_service_account_json: str = ""
 
+    google_admissions_spreadsheet_id: str = (
+        "1TcFkmrpIE8QMIPT_P7pdG99M-sKH_qqL8gPUe9FYiKo"
+    )
+    google_admissions_payments_sheet_name: str = "All Payments - Admissions"
+    google_admissions_payments_sheet_gid: str = ""
+    google_admissions_lms_sheet_name: str = "LMS"
+    google_admissions_lms_sheet_gid: str = ""
+    google_admissions_payments_public_csv_url: str = ""
+    google_admissions_lms_public_csv_url: str = ""
+
     data_dir: Path = Path("./data")
     parquet_dir: Path = Path("./data/parquet")
     metadata_db_url: str = "sqlite:///./data/metadata.db"
@@ -129,6 +139,74 @@ class Settings(BaseSettings):
         if not self.google_refund_spreadsheet_id.strip():
             return False
         return self.google_sheets_service_account_configured
+
+    @property
+    def google_admissions_payments_csv_url_resolved(self) -> str:
+        explicit = self.google_admissions_payments_public_csv_url.strip()
+        if explicit:
+            return explicit
+        sheet_id = self.google_admissions_spreadsheet_id.strip()
+        if not sheet_id:
+            return ""
+        gid = self.google_admissions_payments_sheet_gid.strip()
+        if gid:
+            return (
+                f"https://docs.google.com/spreadsheets/d/{sheet_id}/export"
+                f"?format=csv&gid={gid}"
+            )
+        name = self.google_admissions_payments_sheet_name.strip()
+        if name:
+            from urllib.parse import quote
+
+            return (
+                f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq"
+                f"?tqx=out:csv&sheet={quote(name)}"
+            )
+        return ""
+
+    @property
+    def google_admissions_lms_csv_url_resolved(self) -> str:
+        explicit = self.google_admissions_lms_public_csv_url.strip()
+        if explicit:
+            return explicit
+        sheet_id = self.google_admissions_spreadsheet_id.strip()
+        if not sheet_id:
+            return ""
+        gid = self.google_admissions_lms_sheet_gid.strip()
+        if gid:
+            return (
+                f"https://docs.google.com/spreadsheets/d/{sheet_id}/export"
+                f"?format=csv&gid={gid}"
+            )
+        name = self.google_admissions_lms_sheet_name.strip()
+        if name:
+            from urllib.parse import quote
+
+            return (
+                f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq"
+                f"?tqx=out:csv&sheet={quote(name)}"
+            )
+        return ""
+
+    @property
+    def google_admissions_public_csv_configured(self) -> bool:
+        return bool(
+            self.google_admissions_payments_csv_url_resolved
+            or self.google_admissions_lms_csv_url_resolved
+        )
+
+    @property
+    def google_admissions_api_configured(self) -> bool:
+        if not self.google_admissions_spreadsheet_id.strip():
+            return False
+        return self.google_sheets_service_account_configured
+
+    @property
+    def google_admissions_configured(self) -> bool:
+        return self.google_admissions_public_csv_configured or (
+            self.google_admissions_spreadsheet_id.strip()
+            and self.google_sheets_service_account_configured
+        )
 
     @property
     def cors_origin_list(self) -> List[str]:

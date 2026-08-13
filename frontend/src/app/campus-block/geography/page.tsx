@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { ColumnDef } from '@tanstack/react-table';
 import { api } from '@/lib/api';
@@ -10,7 +10,7 @@ import { IndiaMap } from '@/components/charts/india-map';
 import { SectionHeader } from '@/components/dashboard/section-header';
 import { FetchingHint } from '@/components/dashboard/fetching-hint';
 import { DataTable } from '@/components/tables/data-table';
-import { CampusBifurcation, ChartData, StateSummary } from '@/types';
+import { CampusAdmissionsSummary, CampusBifurcation, ChartData, StateSummary } from '@/types';
 import { cn, formatNumber } from '@/lib/utils';
 import { fetchSnapshotJson, isStaticDataMode } from '@/lib/static-mode';
 
@@ -18,6 +18,8 @@ const ChartPanel = dynamic(
   () => import('@/components/charts/chart-panel').then((m) => m.ChartPanel),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
+
+type GeoMode = 'block' | 'admission';
 
 function ChartSkeleton() {
   return (
@@ -63,8 +65,13 @@ function PageSkeleton() {
 export default function CampusBlockGeographyPage() {
   const filters = useMemo(() => ({}), []);
   const chartH = useChartHeight(520, 280);
+  const [mode, setMode] = useState<GeoMode>('block');
 
-  const { data, loading, isFetching } = useFetch({
+  const {
+    data: blockData,
+    loading: blockLoading,
+    isFetching: blockFetching,
+  } = useFetch({
     fetcher: async () => {
       const live = await api.getCampusBifurcation(filters);
       const picked = pickStateRows(live);
@@ -88,10 +95,49 @@ export default function CampusBlockGeographyPage() {
     deps: [],
   });
 
-  const { rows: stateRows, usingActive } = useMemo(
-    () => pickStateRows(data),
-    [data]
+  const {
+    data: admissionData,
+    loading: admissionLoading,
+    isFetching: admissionFetching,
+  } = useFetch({
+    fetcher: async () => {
+      const live = await api.getCampusAdmissions(filters);
+      if ((live.admission_state_summary?.length ?? 0) > 0 || isStaticDataMode()) {
+        return live;
+      }
+      try {
+        const snap = await fetchSnapshotJson<CampusAdmissionsSummary>(
+          'all/admissions_campus.json'
+        );
+        if ((snap.admission_state_summary?.length ?? 0) === 0) return live;
+        return {
+          ...live,
+          has_sheet: snap.has_sheet || live.has_sheet,
+          admission_state_summary: snap.admission_state_summary,
+        };
+      } catch {
+        return live;
+      }
+    },
+    deps: [],
+  });
+
+  const loading = mode === 'block' ? blockLoading : admissionLoading;
+  const isFetching = mode === 'block' ? blockFetching : admissionFetching;
+
+  const { rows: blockStateRows, usingActive } = useMemo(
+    () => pickStateRows(blockData),
+    [blockData]
   );
+
+  const admissionStateRows = useMemo(
+    () => admissionData?.admission_state_summary ?? [],
+    [admissionData]
+  );
+
+  const stateRows = mode === 'block' ? blockStateRows : admissionStateRows;
+  const hasSheet =
+    mode === 'block' ? Boolean(blockData?.has_sheet) : Boolean(admissionData?.has_sheet);
 
   const totalMapped = useMemo(
     () => stateRows.reduce((s, r) => s + r.leads, 0),
@@ -103,31 +149,36 @@ export default function CampusBlockGeographyPage() {
       .filter((r) => r.leads > 0)
       .sort((a, b) => b.leads - a.leads);
     if (positive.length === 0) return null;
+    const seriesName = mode === 'block' ? 'Block paid' : 'Admissions';
+    const centerLabel = mode === 'block' ? 'Total block' : 'Total admissions';
     return {
-      chart_id: 'campus_block_state_distribution',
+      chart_id:
+        mode === 'block'
+          ? 'campus_block_state_distribution'
+          : 'campus_admission_state_distribution',
       chart_type: 'donut',
       title: '',
       categories: positive.map((r) => formatStateLabel(r.state)),
       series: [
         {
-          name: 'Block paid',
+          name: seriesName,
           data: positive.map((r) => r.leads),
         },
       ],
       extra: {
         center_total: totalMapped,
-        center_label: 'Total block',
+        center_label: centerLabel,
         compact_donut: true,
         show_slice_labels: true,
       },
     };
-  }, [stateRows, totalMapped]);
+  }, [stateRows, totalMapped, mode]);
 
   const tableRows = useMemo(() => {
     const total = totalMapped;
     return stateRows.map((r) => ({
       state: formatStateLabel(r.state),
-      block_paid: r.leads,
+      count: r.leads,
       share_pct: total > 0 ? (r.leads / total) * 100 : 0,
     }));
   }, [stateRows, totalMapped]);
@@ -135,8 +186,8 @@ export default function CampusBlockGeographyPage() {
   const columns: ColumnDef<(typeof tableRows)[number]>[] = [
     { accessorKey: 'state', header: 'State', meta: { width: '50%' } },
     {
-      accessorKey: 'block_paid',
-      header: 'Block paid',
+      accessorKey: 'count',
+      header: mode === 'block' ? 'Block paid' : 'Admissions',
       meta: { width: '25%' },
       cell: ({ getValue }) => formatNumber(Number(getValue() || 0)),
     },
@@ -148,8 +199,17 @@ export default function CampusBlockGeographyPage() {
     },
   ];
 
+  const sectionTitle =
+    mode === 'block' ? 'Block paid by state' : 'Admissions by state';
+  const sectionSubtitle =
+    mode === 'block'
+      ? usingActive
+        ? `Active block amounts after excluding matched refunds · ${formatNumber(totalMapped)} mapped`
+        : `Block payment sheet · ${formatNumber(totalMapped)} mapped`
+      : `Paid admissions matched to block sheet state · ${formatNumber(totalMapped)} mapped`;
+
   return (
-    <div className={cn('space-y-5 sm:space-y-6', isFetching && data && 'opacity-90')}>
+    <div className={cn('space-y-5 sm:space-y-6', isFetching && 'opacity-90')}>
       {!isStaticDataMode() && (
         <p className="text-[10px] text-text-secondary/80 border border-border/60 bg-surface/50 px-3 py-2 rounded-sm">
           Local mode loads live analytics from the backend (~2–4s). Production uses pre-published
@@ -157,36 +217,49 @@ export default function CampusBlockGeographyPage() {
         </p>
       )}
 
-      {loading && !data ? (
+      <div className="inline-flex rounded-sm border border-border overflow-hidden">
+        {(['block', 'admission'] as const).map((key) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setMode(key)}
+            className={cn(
+              'px-3 py-1.5 text-xs uppercase tracking-widest transition-colors',
+              mode === key
+                ? 'bg-primary text-black'
+                : 'bg-surface text-text-secondary hover:text-text'
+            )}
+          >
+            {key === 'block' ? 'Block' : 'Admission'}
+          </button>
+        ))}
+      </div>
+
+      {loading && !(mode === 'block' ? blockData : admissionData) ? (
         <PageSkeleton />
       ) : (
         <FetchingHint active={isFetching} />
       )}
 
-      {!loading && !data?.has_sheet ? (
+      {!loading && !hasSheet ? (
         <div className="panel p-6 sm:p-8 border border-border text-center max-w-lg mx-auto">
           <p className="text-sm text-text-secondary leading-relaxed">
-            Geography will appear after the ops team publishes campus block snapshots.
+            {mode === 'block'
+              ? 'Geography will appear after the ops team publishes campus block snapshots.'
+              : 'Admission geography will appear after the admissions sheet is uploaded and matched to block payments.'}
           </p>
         </div>
-      ) : data?.has_sheet ? (
+      ) : hasSheet ? (
         <>
           <section className="space-y-4 panel p-4 sm:p-5 border border-border">
-            <SectionHeader
-              title="Block paid by state"
-              subtitle={
-                usingActive
-                  ? `Active block amounts after excluding matched refunds · ${formatNumber(totalMapped)} mapped`
-                  : `Block payment sheet · ${formatNumber(totalMapped)} mapped`
-              }
-            />
+            <SectionHeader title={sectionTitle} subtitle={sectionSubtitle} />
             {stateRows.length > 0 ? (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
                 <div className="lg:col-span-7 min-w-0 h-full">
                   <IndiaMap
                     data={stateRows}
                     dimension="leads"
-                    dimensionLabel="Block paid"
+                    dimensionLabel={mode === 'block' ? 'Block paid' : 'Admissions'}
                     height={chartH}
                     zeroAreaColor="#2A2A2A"
                     className="h-full box-border"
@@ -208,7 +281,9 @@ export default function CampusBlockGeographyPage() {
               </div>
             ) : (
               <p className="text-sm text-text-secondary py-8 text-center">
-                No state values found on the block payment sheet.
+                {mode === 'block'
+                  ? 'No state values found on the block payment sheet.'
+                  : 'No state values found from admission↔block email matches.'}
               </p>
             )}
           </section>
@@ -217,12 +292,18 @@ export default function CampusBlockGeographyPage() {
             <section className="space-y-3 panel p-4 sm:p-5 border border-border">
               <SectionHeader
                 title="State summary"
-                subtitle={`${formatNumber(tableRows.length)} states · from payment sheet`}
+                subtitle={`${formatNumber(tableRows.length)} states · ${
+                  mode === 'block' ? 'from payment sheet' : 'from admission block match'
+                }`}
               />
               <DataTable
                 data={tableRows}
                 columns={columns}
-                exportFilename="campus_block_by_state.csv"
+                exportFilename={
+                  mode === 'block'
+                    ? 'campus_block_by_state.csv'
+                    : 'campus_admissions_by_state.csv'
+                }
                 searchPlaceholder="Search state…"
                 height="auto"
               />

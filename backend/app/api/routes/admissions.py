@@ -1,0 +1,68 @@
+"""Admissions payment sheet — manual upload."""
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+
+from app.api.dependencies import require_authenticated_user, require_write_access
+from app.domain.models import UserInfo
+from app.logging_config import get_logger
+from app.services.admissions_service import AdmissionsService
+
+router = APIRouter(prefix="/admissions", tags=["admissions"])
+logger = get_logger(__name__)
+
+
+def get_admissions_service() -> AdmissionsService:
+    return AdmissionsService()
+
+
+@router.get("/status")
+async def admissions_status(
+    service: AdmissionsService = Depends(get_admissions_service),
+    user: UserInfo = Depends(require_authenticated_user),
+):
+    return service.get_status()
+
+
+@router.post("/upload")
+async def upload_admissions_sheet(
+    file: UploadFile = File(...),
+    service: AdmissionsService = Depends(get_admissions_service),
+    user: UserInfo = Depends(require_write_access),
+):
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No file provided",
+        )
+
+    ext = file.filename.rsplit(".", 1)[-1].lower()
+    if ext not in ("xlsx", "xls", "csv"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file type. Use .xlsx, .xls, or .csv",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File is empty",
+        )
+
+    try:
+        result = service.upload_sheet(file.filename, content)
+        logger.info(
+            "admissions_uploaded",
+            user=user.username,
+            filename=file.filename,
+            rows=result.get("row_count"),
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("admissions_upload_failed", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Upload failed: {exc}",
+        ) from exc

@@ -20,6 +20,7 @@ from app.services.leadsquared_mapper import (
     map_activities_to_dataframe,
     map_leads_to_dataframe,
 )
+from app.services.admissions_service import AdmissionsService
 from app.services.persona_activity_service import (
     PersonaActivityService,
     is_know_more_about_btech_event,
@@ -41,6 +42,7 @@ class LeadSquaredSyncService:
         ingestion: Optional[IngestionEngine] = None,
         persona: Optional[PersonaActivityService] = None,
         refund: Optional[RefundService] = None,
+        admissions: Optional[AdmissionsService] = None,
         duck_repo: Optional[DuckDBRepository] = None,
         cache: Optional[AnalyticsCache] = None,
     ):
@@ -50,6 +52,9 @@ class LeadSquaredSyncService:
         self.duck_repo = duck_repo or DuckDBRepository(self.settings)
         self.persona = persona or PersonaActivityService(settings=self.settings)
         self.refund = refund or RefundService(duck_repo=self.duck_repo, settings=self.settings)
+        self.admissions = admissions or AdmissionsService(
+            duck_repo=self.duck_repo, settings=self.settings
+        )
         self.cache = cache or AnalyticsCache(self.settings.analytics_cache_ttl_seconds)
 
     def get_public_config(self) -> Dict[str, Any]:
@@ -413,6 +418,22 @@ class LeadSquaredSyncService:
             refund_result = self.refund.sync_refund_sheet()
             if refund_result.get("status") == "completed":
                 self.duck_repo.invalidate_metadata_cache()
+
+            emit(97, "Syncing admissions sheets")
+            admissions_result: Dict[str, Any] = {"status": "skipped", "row_count": 0}
+            try:
+                admissions_result = self.admissions.sync_admissions_sheets()
+                if admissions_result.get("status") == "completed":
+                    self.duck_repo.invalidate_metadata_cache()
+            except Exception as exc:
+                logger.warning("admissions_sync_failed", error=str(exc))
+                admissions_result = {
+                    "status": "failed",
+                    "row_count": 0,
+                    "message": str(exc),
+                }
+
+            admission_flags = admissions_result.get("admission_flags") or {}
             self.cache.invalidate_all()
 
             master_total = self.duck_repo.get_row_count()
@@ -435,6 +456,13 @@ class LeadSquaredSyncService:
                 message += f"; block paid by partner: {partner_bits}"
             if refund_result.get("row_count"):
                 message += f"; refunds synced={refund_result.get('row_count')}"
+            if admissions_result.get("row_count") or admissions_result.get("lms_row_count"):
+                message += (
+                    f"; admissions payments={admissions_result.get('row_count', 0)}"
+                    f" lms={admissions_result.get('lms_row_count', 0)}"
+                )
+            if admission_flags.get("newly_marked"):
+                message += f"; DP admissions marked={admission_flags.get('newly_marked')}"
             completed_at = datetime.utcnow()
             self._persist_run(
                 run_id=run_id,
@@ -458,6 +486,8 @@ class LeadSquaredSyncService:
                 "master_total_rows": master_total,
                 "block_paid_by_partner": block_stats.get("block_paid_by_partner") or {},
                 "refund_sync": refund_result,
+                "admissions_sync": admissions_result,
+                "admission_flags": admission_flags,
                 "message": message,
             }
         except Exception as exc:

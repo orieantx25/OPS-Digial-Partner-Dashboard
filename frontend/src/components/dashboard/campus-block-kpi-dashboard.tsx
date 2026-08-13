@@ -61,6 +61,11 @@ export function CampusBlockKpiDashboard({ data }: { data: CampusBifurcation }) {
         <HeroMetric
           label="Active block"
           value={activeTotal}
+          sub={
+            grossTotal > activeTotal
+              ? `${formatNumber(grossTotal - activeTotal)} matched refunds excluded · ${formatNumber(refund?.retained_cases ?? 0)} retained`
+              : undefined
+          }
           valueClassName="text-green-500"
         />
         <HeroMetric

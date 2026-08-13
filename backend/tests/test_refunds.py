@@ -103,6 +103,61 @@ def test_on_hold_sst_not_counted_as_refund_applied(tmp_path):
     assert int(adjusted_rows[0]["cnt"]) == 1  # only a@example.com removed
 
 
+def test_active_block_excludes_applied_keeps_retained(tmp_path):
+    """Active block = all blocks − applied refunds; retained (on-hold SST) stay in."""
+    from app.config import Settings
+    from app.infrastructure.duckdb_repo import AnalyticsCache, DuckDBRepository
+    from app.services.analytics_service import AnalyticsEngine
+    from app.services.block_payment_service import BlockPaymentService
+
+    settings = Settings(
+        data_dir=str(tmp_path),
+        parquet_dir=str(tmp_path / "parquet"),
+        duckdb_path=str(tmp_path / "analytics.duckdb"),
+        metadata_db_url=f"sqlite:///{tmp_path / 'metadata.db'}",
+    )
+    (tmp_path / "parquet").mkdir(parents=True)
+
+    block_svc = BlockPaymentService(settings=settings)
+    refund_svc = RefundService(settings=settings)
+
+    block_svc.upload_sheet(
+        "payments.csv",
+        b"Email,Phone,CollegeCode,Gender,State\n"
+        b"applied@example.com,9000000001,ADYPU,Male,Karnataka\n"
+        b"retained@example.com,9000000002,SSAHE,Female,Maharashtra\n"
+        b"clean@example.com,9000000003,ADYPU,Male,Goa\n",
+    )
+    refund_svc.upload_sheet(
+        "refunds.csv",
+        b"Mail ID,Phone Number,Final Status,Campus\n"
+        b"applied@example.com,9000000001,Refunded,ADYPU\n"
+        b"retained@example.com,9000000002,On hold as per SST team,SSAHE\n",
+    )
+
+    duck = DuckDBRepository(settings)
+    engine = AnalyticsEngine(duck_repo=duck, cache=AnalyticsCache(ttl_seconds=0))
+    exclude = engine._refund_exclude_sql("s")
+
+    gross = duck.query_dicts("SELECT COUNT(*) AS cnt FROM block_payment_tracking")
+    assert int(gross[0]["cnt"]) == 3
+
+    active = duck.query_dicts(
+        f"SELECT COUNT(*) AS cnt FROM block_payment_tracking s WHERE 1=1 {exclude}"
+    )
+    assert int(active[0]["cnt"]) == 2  # applied removed; retained + clean remain
+
+    remaining = {
+        r["email"]
+        for r in duck.query_dicts(
+            f"SELECT email FROM block_payment_tracking s WHERE 1=1 {exclude}"
+        )
+    }
+    assert "applied@example.com" not in remaining
+    assert "retained@example.com" in remaining
+    assert "clean@example.com" in remaining
+
+
 def test_refund_campus_prefers_campus_over_university(tmp_path):
     """Campus column wins when university points at the other school (no double-count)."""
     from app.config import Settings
@@ -263,6 +318,45 @@ def test_refund_exclude_sql_reduces_matched_payment_rows(tmp_path):
         f"SELECT COUNT(*) AS cnt FROM block_payment_tracking s WHERE 1=1 {exclude}"
     )
     assert int(total_rows[0]["cnt"]) == 2
+    assert int(adjusted_rows[0]["cnt"]) == 1
+
+
+def test_sent_to_uni_on_refund_sheet_reduces_active_block(tmp_path):
+    """Sent to Uni / Processed refund rows must reduce active block (not only is_refund)."""
+    from app.config import Settings
+    from app.infrastructure.duckdb_repo import AnalyticsCache, DuckDBRepository
+    from app.services.analytics_service import AnalyticsEngine
+    from app.services.block_payment_service import BlockPaymentService
+
+    settings = Settings(
+        data_dir=str(tmp_path),
+        parquet_dir=str(tmp_path / "parquet"),
+        duckdb_path=str(tmp_path / "analytics.duckdb"),
+        metadata_db_url=f"sqlite:///{tmp_path / 'metadata.db'}",
+    )
+    (tmp_path / "parquet").mkdir(parents=True)
+
+    block_svc = BlockPaymentService(settings=settings)
+    refund_svc = RefundService(settings=settings)
+
+    block_svc.upload_sheet(
+        "payments.csv",
+        b"Email,Phone,CollegeCode,Gender\n"
+        b"a@example.com,9876543210,ADYPU,Male\n"
+        b"b@example.com,9876543211,SSAHE,Female\n",
+    )
+    refund_svc.upload_sheet(
+        "refunds.csv",
+        b"Mail ID,Phone Number,Final Status\n"
+        b"a@example.com,9876543210,Sent to Uni\n",
+    )
+
+    duck = DuckDBRepository(settings)
+    engine = AnalyticsEngine(duck_repo=duck, cache=AnalyticsCache(ttl_seconds=0))
+    exclude = engine._refund_exclude_sql("s")
+    adjusted_rows = duck.query_dicts(
+        f"SELECT COUNT(*) AS cnt FROM block_payment_tracking s WHERE 1=1 {exclude}"
+    )
     assert int(adjusted_rows[0]["cnt"]) == 1
 
 

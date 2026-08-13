@@ -8,7 +8,16 @@ import { useFetch } from '@/hooks/use-fetch';
 import { useChartHeight } from '@/hooks/use-chart-height';
 import { useAppStore, useEffectiveFilters } from '@/store/app-store';
 import { ChartPanel } from '@/components/charts/chart-panel';
-import { ChartData, PartnerCounsellorClash, PartnerCounsellorClashes, PartnerDpRefundRow, PartnerDpRefunds } from '@/types';
+import {
+  ChartData,
+  PartnerCounsellorClash,
+  PartnerCounsellorClashes,
+  PartnerDpRefundRow,
+  PartnerDpRefunds,
+  PartnerMetricTrends,
+  PartnerTrendGrain,
+  PartnerTrendMetric,
+} from '@/types';
 import { DataTable, useLeadColumns } from '@/components/tables/data-table';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { ClickableMetricBox } from '@/components/dashboard/clickable-metric-box';
@@ -41,6 +50,18 @@ const PARTNER_TREND_OPTIONS = [
   { key: 'weekly_leads', label: 'Weekly' },
   { key: 'monthly_leads', label: 'Monthly' },
 ] as const;
+
+const OVERVIEW_GRAIN_OPTIONS: { key: PartnerTrendGrain; label: string }[] = [
+  { key: 'daily', label: 'Daily' },
+  { key: 'weekly', label: 'Weekly' },
+  { key: 'monthly', label: 'Monthly' },
+];
+
+const OVERVIEW_METRIC_OPTIONS: { key: PartnerTrendMetric; label: string }[] = [
+  { key: 'leads', label: 'Leads' },
+  { key: 'test_takers', label: 'Test Takers' },
+  { key: 'block_amount', label: 'Block Amount' },
+];
 
 function emptyPartnerTrendChart(id: string, title: string): ChartData {
   return {
@@ -171,6 +192,8 @@ function PartnerPageInner() {
   const [selectedPartner, setSelectedPartner] = useState<string | null>(partnerFromUrl);
   const [partnerTrend, setPartnerTrend] =
     useState<(typeof PARTNER_TREND_OPTIONS)[number]['key']>('monthly_leads');
+  const [overviewGrain, setOverviewGrain] = useState<PartnerTrendGrain>('weekly');
+  const [overviewMetric, setOverviewMetric] = useState<PartnerTrendMetric>('leads');
   const setDrillDown = useAppStore((s) => s.setDrillDown);
   const clearDrillDown = useAppStore((s) => s.clearDrillDown);
   const openExplorer = useLeadExplorerStore((s) => s.openExplorer);
@@ -208,6 +231,30 @@ function PartnerPageInner() {
     deps: [JSON.stringify(filters)],
     enabled: !selectedPartner,
   });
+
+  const { data: partnerTrends } = useFetch({
+    fetcher: () => api.getPartnerMetricTrends(filters, overviewGrain),
+    deps: [JSON.stringify(filters), overviewGrain],
+    enabled: !selectedPartner,
+  });
+
+  const overviewTrendChart = useMemo((): ChartData | null => {
+    const charts = (partnerTrends as PartnerMetricTrends | undefined)?.charts;
+    if (!charts) return null;
+    const base = charts[overviewMetric];
+    if (!base) return null;
+    return {
+      ...base,
+      extra: {
+        ...base.extra,
+        hide_point_labels: true,
+        smooth: true,
+        sparse_line: true,
+        preselect_top: 3,
+        axis_label_auto: true,
+      },
+    };
+  }, [partnerTrends, overviewMetric]);
 
   const { data: clashes } = useFetch({
     fetcher: () => api.getPartnerCounsellorClashes(filters),
@@ -385,6 +432,53 @@ function PartnerPageInner() {
 
       {!selectedPartner && comparison && (
         <>
+          <SectionHeader
+            title="Partner trends"
+            subtitle="Top 3 partners shown by default — click legend to compare others. Prefer Weekly/Monthly for cleaner trends."
+            action={
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex border border-border">
+                  {OVERVIEW_GRAIN_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setOverviewGrain(opt.key)}
+                      className={cn(
+                        'px-3 py-1 text-xs uppercase',
+                        overviewGrain === opt.key
+                          ? 'bg-primary text-white'
+                          : 'bg-surface text-text-secondary hover:text-text'
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex border border-border">
+                  {OVERVIEW_METRIC_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setOverviewMetric(opt.key)}
+                      className={cn(
+                        'px-3 py-1 text-xs',
+                        overviewMetric === opt.key
+                          ? 'bg-primary text-white'
+                          : 'bg-surface text-text-secondary hover:text-text'
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            }
+          />
+          {overviewTrendChart && (
+            <ChartPanel chart={overviewTrendChart} height={Math.max(trendHeight, 360)} />
+          )}
+
+          <SectionHeader title="Partner comparison" subtitle="Snapshot totals by partner" />
           <ChartPanel
             chart={comparison}
             height={comparisonHeight}

@@ -15,6 +15,12 @@ export function CampusBlockShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const onGeography = pathname.startsWith('/campus-block/geography');
+  const onAdmissions = pathname.startsWith('/campus-block/admissions');
+  const pageTitle = onGeography
+    ? 'Geography'
+    : onAdmissions
+      ? 'Admissions'
+      : 'Block amount';
 
   if (!authReady) {
     return (
@@ -50,7 +56,7 @@ export function CampusBlockShell({ children }: { children: React.ReactNode }) {
             />
             <div className="min-w-0">
               <div className="text-sm font-semibold text-text truncate leading-tight">
-                {onGeography ? 'Geography' : 'Overall campus'}
+                {pageTitle}
               </div>
               <div className="text-[10px] uppercase tracking-widest text-text-secondary truncate">
                 Campus block amount
@@ -96,12 +102,24 @@ export function CampusBlockShell({ children }: { children: React.ReactNode }) {
               onClick={() => setDrawerOpen(false)}
               className={cn(
                 'flex items-center gap-2.5 py-2.5 px-2 text-sm pl-2 border-l-2',
-                !onGeography
+                !onGeography && !onAdmissions
                   ? 'text-text border-primary bg-panel'
                   : 'text-text-secondary border-transparent hover:text-text'
               )}
             >
-              Overall campus
+              Block amount
+            </Link>
+            <Link
+              href="/campus-block/admissions"
+              onClick={() => setDrawerOpen(false)}
+              className={cn(
+                'flex items-center gap-2.5 py-2.5 px-2 text-sm pl-2 border-l-2',
+                onAdmissions
+                  ? 'text-text border-primary bg-panel'
+                  : 'text-text-secondary border-transparent hover:text-text'
+              )}
+            >
+              Admissions
             </Link>
             <Link
               href="/campus-block/geography"

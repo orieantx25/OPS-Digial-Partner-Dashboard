@@ -1,1 +1,1 @@
-{"has_data":true,"row_count":111,"paid_count":111,"source_filename":"query_result_2026-08-11T21_20_00.73537399Z.csv","uploaded_at":"2026-08-11T21:58:11.016540"}
+{"has_data":true,"has_payments":true,"has_lms":true,"row_count":526,"paid_count":182,"lms_row_count":204,"verified_count":161,"source_filename":"google:public_csv:payments","lms_source_filename":"google:public_csv:lms","uploaded_at":"2026-08-13T12:30:11.067457","google_configured":true,"public_csv_configured":true,"service_account_configured":false}

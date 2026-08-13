@@ -3,16 +3,22 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
-import { Building2, LayoutGrid, Map } from 'lucide-react';
+import { Building2, GraduationCap, LayoutGrid, Map } from 'lucide-react';
 import { useAppStore } from '@/store/app-store';
 import { cn } from '@/lib/utils';
 
 const CAMPUS_NAV = [
   {
     href: '/campus-block',
-    label: 'Overall campus',
+    label: 'Block amount',
     icon: Building2,
     exact: true,
+  },
+  {
+    href: '/campus-block/admissions',
+    label: 'Admissions',
+    icon: GraduationCap,
+    exact: false,
   },
   {
     href: '/campus-block/geography',

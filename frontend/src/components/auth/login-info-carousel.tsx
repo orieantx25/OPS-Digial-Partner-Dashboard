@@ -66,8 +66,8 @@ const REPORT_LINES = [
   'Digital Partner — Overview, funnel, partners, executive KPIs',
   'Digital Partner — Campus & block KPIs, refund cases, ROI',
   'Digital Partner — Block payment reconciliation, geographic & campaign views',
-  'Campus Block Amount — Block bifurcation, refunds, gender splits',
-  'Campus Block Amount — SSAHE & ADYPU campus-level KPIs',
+  'Campus Admission and Block Dashboard — Block bifurcation, refunds, gender splits',
+  'Campus Admission and Block Dashboard — SSAHE & ADYPU campus-level KPIs',
   'Loan Operations — Pipeline, vendor tracking, risk cases',
   'Loan Operations — Campus bifurcation and loan required views',
 ];

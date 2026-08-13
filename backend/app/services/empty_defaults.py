@@ -249,6 +249,7 @@ def empty_campus_bifurcation() -> Dict[str, Any]:
         },
         "sheet_unassigned_count": 0,
         "adjusted_sheet_total": 0,
+        "active_block_excluded_count": 0,
         "adjusted_sheet_by_campus": [],
         "adjusted_sheet_by_gender": [],
         "adjusted_sheet_campus_chart": {
@@ -293,6 +294,83 @@ def empty_campus_bifurcation() -> Dict[str, Any]:
 
 def empty_refund_cases() -> PaginatedResponse:
     return PaginatedResponse(items=[], total=0, page=1, page_size=50, total_pages=1)
+
+
+def empty_dp_admissions() -> Dict[str, Any]:
+    return {
+        "has_sheet": False,
+        "total_paid": 0,
+        "verified_sem1": 0,
+        "dp_matched": 0,
+        "by_partner": [],
+        "partner_chart": {
+            "chart_id": "dp_admissions_by_partner",
+            "chart_type": "bar",
+            "title": "DP admissions by partner",
+            "categories": [],
+            "series": [],
+        },
+        "fee_status": {
+            "has_lms": False,
+            "verified": 0,
+            "partly_paid": 0,
+            "under_review": 0,
+            "rejected": 0,
+            "total_rows": 0,
+            "sem1_rows": 0,
+            "by_status": [],
+            "status_chart": None,
+            "by_campus_verified": [],
+        },
+        "rows": [],
+    }
+
+
+def empty_campus_admissions() -> Dict[str, Any]:
+    return {
+        "has_sheet": False,
+        "total_paid": 0,
+        "verified_sem1": 0,
+        "matched_to_block": 0,
+        "unmatched_to_block": 0,
+        "by_campus": [],
+        "by_gender": [],
+        "campus_chart": {
+            "chart_id": "campus_admissions_by_campus",
+            "chart_type": "bar",
+            "title": "Admissions by campus",
+            "categories": [],
+            "series": [],
+        },
+        "gender_chart": {
+            "chart_id": "campus_admissions_by_gender",
+            "chart_type": "donut",
+            "title": "Admissions by gender",
+            "categories": [],
+            "series": [],
+            "extra": {
+                "center_total": 0,
+                "center_label": "Paid",
+                "compact_donut": True,
+                "show_slice_labels": True,
+            },
+        },
+        "campus_gender_charts": [],
+        "admission_state_summary": [],
+        "fee_status": {
+            "has_lms": False,
+            "verified": 0,
+            "partly_paid": 0,
+            "under_review": 0,
+            "rejected": 0,
+            "total_rows": 0,
+            "sem1_rows": 0,
+            "by_status": [],
+            "status_chart": None,
+            "by_campus_verified": [],
+        },
+        "rows": [],
+    }
 
 
 def empty_search() -> PaginatedResponse:

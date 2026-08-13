@@ -244,8 +244,20 @@ function buildLineOption(
   };
 }
 
-function multiSeriesLegend(seriesNames: string[], isMobile: boolean) {
+function multiSeriesLegend(
+  seriesNames: string[],
+  isMobile: boolean,
+  preselectTop?: number
+) {
   if (seriesNames.length <= 1) return undefined;
+
+  const selectedLimit =
+    typeof preselectTop === 'number' && preselectTop > 0
+      ? preselectTop
+      : seriesNames.length;
+  const selected = Object.fromEntries(
+    seriesNames.map((n, i) => [n, i < selectedLimit])
+  );
 
   const scroll = seriesNames.length >= LEGEND_SCROLL_THRESHOLD;
   const legendAtBottom =
@@ -267,7 +279,7 @@ function multiSeriesLegend(seriesNames: string[], isMobile: boolean) {
       pageTextStyle: { color: '#B5B5B5', fontSize: 10 },
       textStyle: { color: '#B5B5B5', fontSize: isMobile ? 10 : 11 },
       data: seriesNames,
-      selected: Object.fromEntries(seriesNames.map((n) => [n, true])),
+      selected,
     };
   }
 
@@ -283,7 +295,7 @@ function multiSeriesLegend(seriesNames: string[], isMobile: boolean) {
     itemGap: 12,
     textStyle: { color: '#B5B5B5', fontSize: 11 },
     data: seriesNames,
-    selected: Object.fromEntries(seriesNames.map((n) => [n, true])),
+    selected,
   };
 }
 
@@ -365,6 +377,12 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
     case 'area': {
       const multi = chart.series.length > 1;
       const forecastStyle = Boolean(chart.extra?.forecast_style);
+      const hidePointLabels = Boolean(chart.extra?.hide_point_labels);
+      const smoothLines = Boolean(chart.extra?.smooth);
+      const sparseLine = Boolean(chart.extra?.sparse_line);
+      const axisLabelAuto = Boolean(chart.extra?.axis_label_auto);
+      const preselectTop = Number(chart.extra?.preselect_top || 0) || undefined;
+      const denseCategories = chart.categories.length > 24;
       const mixedScale = multi && !forecastStyle && useDualYAxis(chart.series);
       if (mixedScale) {
         return buildLineOption(chart, base, focusedIndex, isMobile);
@@ -455,11 +473,66 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
                 return lines.join('');
               },
             }
-          : base.tooltip,
+          : {
+              ...base.tooltip,
+              trigger: 'axis' as const,
+              // Prefer readable partner list; filter zero/null for dense multi-series.
+              formatter: multi
+                ? (params: unknown) => {
+                    const items = (Array.isArray(params) ? params : [params]) as {
+                      axisValueLabel?: string;
+                      axisValue?: string;
+                      seriesName?: string;
+                      value?: number | null;
+                      marker?: string;
+                    }[];
+                    if (!items.length) return '';
+                    const axis = String(
+                      items[0].axisValueLabel ?? items[0].axisValue ?? ''
+                    );
+                    const rows = items
+                      .map((p) => {
+                        const v = Number(p.value);
+                        if (!Number.isFinite(v) || v === 0) return null;
+                        return `${p.marker || ''} ${p.seriesName}: <b>${formatNumber(v)}</b>`;
+                      })
+                      .filter(Boolean);
+                    if (!rows.length) {
+                      return `<div>${axis}</div><div class="text-secondary">No volume</div>`;
+                    }
+                    return [`<div style="margin-bottom:4px">${axis}</div>`, ...rows].join(
+                      '<br/>'
+                    );
+                  }
+                : base.tooltip &&
+                    typeof base.tooltip === 'object' &&
+                    'formatter' in base.tooltip
+                  ? (base.tooltip as { formatter?: unknown }).formatter
+                  : undefined,
+            },
         legend: multi
-          ? multiSeriesLegend(chart.series.map((s) => s.name), isMobile)
+          ? multiSeriesLegend(
+              chart.series.map((s) => s.name),
+              isMobile,
+              preselectTop
+            )
           : undefined,
-        xAxis: { type: 'category', data: chart.categories, axisLine: { lineStyle: { color: '#3A3A3A' } } },
+        xAxis: {
+          type: 'category',
+          data: chart.categories,
+          axisLine: { lineStyle: { color: '#3A3A3A' } },
+          axisLabel: {
+            color: '#B5B5B5',
+            fontSize: isMobile ? 9 : 10,
+            hideOverlap: true,
+            rotate: denseCategories || axisLabelAuto ? (isMobile ? 40 : 28) : 0,
+            interval: denseCategories || axisLabelAuto ? 'auto' : 0,
+            formatter: (value: string) =>
+              denseCategories && String(value).length > 10
+                ? truncateAxisLabel(String(value), 10)
+                : value,
+          },
+        },
         yAxis: valueYAxis(),
         series: chart.series.map((s, i) => {
           const isExpected = forecastStyle && s.name.toLowerCase().startsWith('expected');
@@ -469,26 +542,38 @@ function buildOption(chart: ChartData, focusedIndex = 0, isMobile = false) {
               ? '#F5A623'
               : '#7DD3FC'
             : seriesColor(s.name, i);
+          const pointCount = s.data.length;
+          const showSymbols =
+            !sparseLine &&
+            !hidePointLabels &&
+            (isExpected || pointCount <= 24);
           return {
             name: s.name,
             type: 'line',
             data: s.data,
-            smooth: false,
+            smooth: smoothLines || isExpected ? 0.25 : false,
+            sampling: pointCount > 80 ? 'lttb' : undefined,
             connectNulls: isExpected,
-            showSymbol: true,
-            symbolSize: isExpected ? 7 : 5,
-            areaStyle: chart.chart_type === 'area' && !isExpected ? { opacity: 0.12 } : undefined,
+            showSymbol: showSymbols,
+            symbolSize: isExpected ? 7 : 4,
+            areaStyle:
+              chart.chart_type === 'area' && !isExpected ? { opacity: 0.08 } : undefined,
             lineStyle: {
               color,
-              width: isExpected ? 2.5 : 2,
+              width: isExpected ? 2.5 : multi ? 2.25 : 2,
               type: isExpected ? 'dashed' : 'solid',
               opacity: isExpected ? 0.85 : 1,
             },
             itemStyle: { color },
-            label: isMobile
-              ? { show: false }
-              : valuePointLabel({ color, fontWeight: isExpected ? 600 : 'normal' }),
+            label:
+              isMobile || hidePointLabels || sparseLine || multi
+                ? { show: false }
+                : valuePointLabel({ color, fontWeight: isExpected ? 600 : 'normal' }),
             labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
+            emphasis: {
+              focus: multi ? 'series' : 'none',
+              lineStyle: { width: 3.5 },
+            },
           };
         }),
       };

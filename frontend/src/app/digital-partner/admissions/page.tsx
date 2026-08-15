@@ -170,6 +170,13 @@ export default function AdmissionsPage() {
         </p>
       )}
 
+      {loading && !data ? (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="panel h-[88px] border border-border animate-pulse" />
+          ))}
+        </div>
+      ) : (
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="panel p-4 border border-border">
           <div className="text-[10px] uppercase tracking-widest text-text-secondary">
@@ -204,6 +211,7 @@ export default function AdmissionsPage() {
           </div>
         </div>
       </div>
+      )}
 
       {(data?.fee_status?.status_chart || data?.partner_chart) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">

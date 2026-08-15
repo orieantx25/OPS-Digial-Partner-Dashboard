@@ -217,13 +217,15 @@ function PartnerPageInner() {
   const selectPartner = (partner: string) => {
     setSelectedPartner(partner);
     setDrillDown({ partner });
-    router.replace(`/partner?partner=${encodeURIComponent(partner)}`, { scroll: false });
+    router.replace(`/digital-partner/partner?partner=${encodeURIComponent(partner)}`, {
+      scroll: false,
+    });
   };
 
   const clearPartner = () => {
     setSelectedPartner(null);
     clearDrillDown();
-    router.replace('/partner', { scroll: false });
+    router.replace('/digital-partner/partner', { scroll: false });
   };
 
   const { data: comparison } = useFetch({

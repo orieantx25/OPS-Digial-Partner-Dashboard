@@ -26,6 +26,15 @@ const nextConfig = {
       },
     ];
   },
+  async redirects() {
+    return [
+      {
+        source: '/partner',
+        destination: '/digital-partner/partner',
+        permanent: false,
+      },
+    ];
+  },
   async rewrites() {
     // Static leadership build serves /data/snapshots — do not proxy to a backend.
     if (process.env.NEXT_PUBLIC_DATA_MODE === 'static') {

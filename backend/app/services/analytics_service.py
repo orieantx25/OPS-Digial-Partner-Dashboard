@@ -3924,27 +3924,111 @@ class AnalyticsEngine:
             f"ELSE COALESCE(NULLIF(TRIM(CAST({alias}.campus_code AS VARCHAR)), ''), '(blank)') END"
         )
 
-    def _admissions_dp_master_match_sql(self, alias: str = "a") -> str:
-        """Admission email/phone matches a digital-partner lead in master."""
+    def _admissions_dp_match_cte(self) -> str:
+        """Paid admissions matched to DP leads via hash joins (email, then last-10 phone).
+
+        Avoids OR-join + regexp over the full master table, which nested-looped
+        ~hundreds of sheet rows against ~750k LSQ leads.
+        """
         partners = self._canonical_partner_sql_list()
         return f"""
-            EXISTS (
-                SELECT 1 FROM {MASTER_DATASET_TABLE} m
+            WITH paid AS (
+                SELECT
+                    a.sheet_id,
+                    a.email,
+                    a.phone AS sheet_phone,
+                    a.student_name,
+                    a.campus_code,
+                    a.semester,
+                    a.amount_inr,
+                    a.paid_at,
+                    a.status,
+                    a.order_id,
+                    a.payment_id,
+                    a.match_email,
+                    CASE
+                        WHEN a.match_phone IS NOT NULL AND LENGTH(a.match_phone) >= 10
+                        THEN RIGHT(a.match_phone, 10)
+                        ELSE NULL
+                    END AS phone10
+                FROM {ADMISSIONS_TABLE} a
+                WHERE a.is_paid
+            ),
+            dp_email AS (
+                SELECT
+                    LOWER(TRIM(COALESCE(m.email, ''))) AS match_email,
+                    ANY_VALUE(COALESCE(NULLIF(TRIM(CAST(m.partner AS VARCHAR)), ''), '(blank)')) AS partner,
+                    ANY_VALUE(m.name) AS lead_name,
+                    ANY_VALUE(m.phone) AS phone
+                FROM {MASTER_DATASET_TABLE} m
                 WHERE m.partner IN ({partners})
-                  AND (
-                    ({alias}.match_email IS NOT NULL
-                     AND LOWER(TRIM(COALESCE(m.email, ''))) = {alias}.match_email)
-                    OR (
-                        {alias}.match_phone IS NOT NULL
-                        AND LENGTH({alias}.match_phone) >= 10
-                        AND RIGHT(
-                            regexp_replace(
-                                COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'
-                            ),
-                            10
-                        ) = RIGHT({alias}.match_phone, 10)
-                    )
-                  )
+                  AND NULLIF(TRIM(COALESCE(m.email, '')), '') IS NOT NULL
+                  AND LOWER(TRIM(m.email)) IN (SELECT match_email FROM paid WHERE match_email IS NOT NULL)
+                GROUP BY 1
+            ),
+            unmatched_phone AS (
+                SELECT p.*
+                FROM paid p
+                LEFT JOIN dp_email e ON p.match_email IS NOT NULL AND e.match_email = p.match_email
+                WHERE e.match_email IS NULL AND p.phone10 IS NOT NULL
+            ),
+            dp_phone AS (
+                SELECT
+                    RIGHT(
+                        regexp_replace(COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'),
+                        10
+                    ) AS phone10,
+                    ANY_VALUE(COALESCE(NULLIF(TRIM(CAST(m.partner AS VARCHAR)), ''), '(blank)')) AS partner,
+                    ANY_VALUE(m.name) AS lead_name,
+                    ANY_VALUE(m.phone) AS phone
+                FROM {MASTER_DATASET_TABLE} m
+                WHERE m.partner IN ({partners})
+                  AND LENGTH(regexp_replace(COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g')) >= 10
+                  AND RIGHT(
+                        regexp_replace(COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'),
+                        10
+                      ) IN (SELECT phone10 FROM unmatched_phone)
+                GROUP BY 1
+            ),
+            matched AS (
+                SELECT
+                    p.sheet_id,
+                    p.email,
+                    p.sheet_phone,
+                    p.student_name,
+                    p.campus_code,
+                    p.semester,
+                    p.amount_inr,
+                    p.paid_at,
+                    p.status,
+                    p.order_id,
+                    p.payment_id,
+                    e.partner,
+                    e.lead_name,
+                    COALESCE(e.phone, p.sheet_phone) AS phone,
+                    1 AS match_rank
+                FROM paid p
+                INNER JOIN dp_email e
+                  ON p.match_email IS NOT NULL AND e.match_email = p.match_email
+                UNION ALL
+                SELECT
+                    p.sheet_id,
+                    p.email,
+                    p.sheet_phone,
+                    p.student_name,
+                    p.campus_code,
+                    p.semester,
+                    p.amount_inr,
+                    p.paid_at,
+                    p.status,
+                    p.order_id,
+                    p.payment_id,
+                    ph.partner,
+                    ph.lead_name,
+                    COALESCE(ph.phone, p.sheet_phone) AS phone,
+                    2 AS match_rank
+                FROM unmatched_phone p
+                INNER JOIN dp_phone ph ON ph.phone10 = p.phone10
             )
         """
 
@@ -4100,6 +4184,11 @@ class AnalyticsEngine:
 
     def get_dp_admissions(self, filters: FilterParams) -> Dict[str, Any]:
         """Paid admissions whose email/phone matches a digital-partner LSQ lead."""
+        cache_key = self._filter_payload(filters)
+        cached = self.cache.get("dp_admissions", cache_key)
+        if cached is not None:
+            return cached
+
         empty = empty_dp_admissions()
         if not self.duck_repo.admissions_exists():
             return empty
@@ -4110,46 +4199,68 @@ class AnalyticsEngine:
         total_paid = int(total_paid_rows[0]["cnt"]) if total_paid_rows else 0
         fee_status = self._lms_fee_status_summary()
         if not self._has_data():
-            return {
+            result = {
                 **empty,
                 "has_sheet": True,
                 "total_paid": total_paid,
                 "fee_status": fee_status,
                 "verified_sem1": fee_status.get("verified", 0),
             }
+            self.cache.set("dp_admissions", cache_key, result)
+            return result
 
-        partners = self._canonical_partner_sql_list()
-        dp_match = self._admissions_dp_master_match_sql("a")
-        by_partner_rows = self.duck_repo.query_dicts(
+        match_cte = self._admissions_dp_match_cte()
+        rows = self.duck_repo.query_dicts(
             f"""
+            {match_cte}
             SELECT
-                COALESCE(NULLIF(TRIM(CAST(m.partner AS VARCHAR)), ''), '(blank)') AS partner,
-                COUNT(DISTINCT COALESCE(a.sheet_id, a.email, a.match_phone)) AS count
-            FROM {ADMISSIONS_TABLE} a
-            INNER JOIN {MASTER_DATASET_TABLE} m
-              ON m.partner IN ({partners})
-             AND (
-                (a.match_email IS NOT NULL
-                 AND LOWER(TRIM(COALESCE(m.email, ''))) = a.match_email)
-                OR (
-                    a.match_phone IS NOT NULL
-                    AND LENGTH(a.match_phone) >= 10
-                    AND RIGHT(
-                        regexp_replace(
-                            COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'
-                        ),
-                        10
-                    ) = RIGHT(a.match_phone, 10)
-                )
-             )
-            WHERE a.is_paid
-            GROUP BY 1
-            ORDER BY count DESC
+                sheet_id,
+                email,
+                sheet_phone,
+                student_name,
+                campus_code,
+                semester,
+                amount_inr,
+                paid_at,
+                status,
+                order_id,
+                payment_id,
+                partner,
+                phone,
+                lead_name
+            FROM matched
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(sheet_id, email, sheet_phone)
+                ORDER BY match_rank
+            ) = 1
+            ORDER BY paid_at DESC NULLS LAST, email
+            LIMIT 500
             """
         )
+        out_rows: List[Dict[str, Any]] = []
+        partner_counts: Dict[str, int] = {}
+        for r in rows:
+            partner = str(r.get("partner") or "(blank)")
+            partner_counts[partner] = partner_counts.get(partner, 0) + 1
+            out_rows.append(
+                {
+                    "sheet_id": r.get("sheet_id"),
+                    "email": r.get("email"),
+                    "phone": r.get("phone") or r.get("sheet_phone"),
+                    "lead_name": r.get("lead_name") or r.get("student_name"),
+                    "partner": partner,
+                    "campus_code": r.get("campus_code"),
+                    "semester": r.get("semester"),
+                    "amount_inr": r.get("amount_inr"),
+                    "paid_at": r.get("paid_at"),
+                    "status": r.get("status"),
+                    "order_id": r.get("order_id"),
+                    "payment_id": r.get("payment_id"),
+                }
+            )
         by_partner = [
-            {"partner": str(r.get("partner") or "(blank)"), "count": int(r.get("count") or 0)}
-            for r in by_partner_rows
+            {"partner": name, "count": count}
+            for name, count in sorted(partner_counts.items(), key=lambda x: (-x[1], x[0]))
         ]
         dp_matched = sum(p["count"] for p in by_partner)
 
@@ -4166,70 +4277,7 @@ class AnalyticsEngine:
             ],
         )
 
-        rows = self.duck_repo.query_dicts(
-            f"""
-            SELECT
-                a.sheet_id,
-                a.email,
-                a.phone AS sheet_phone,
-                a.student_name,
-                a.campus_code,
-                a.semester,
-                a.amount_inr,
-                a.paid_at,
-                a.status,
-                a.order_id,
-                a.payment_id,
-                COALESCE(NULLIF(TRIM(CAST(m.partner AS VARCHAR)), ''), '(blank)') AS partner,
-                m.phone AS phone,
-                m.name AS lead_name
-            FROM {ADMISSIONS_TABLE} a
-            INNER JOIN {MASTER_DATASET_TABLE} m
-              ON m.partner IN ({partners})
-             AND (
-                (a.match_email IS NOT NULL
-                 AND LOWER(TRIM(COALESCE(m.email, ''))) = a.match_email)
-                OR (
-                    a.match_phone IS NOT NULL
-                    AND LENGTH(a.match_phone) >= 10
-                    AND RIGHT(
-                        regexp_replace(
-                            COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g'
-                        ),
-                        10
-                    ) = RIGHT(a.match_phone, 10)
-                )
-             )
-            WHERE a.is_paid AND ({dp_match})
-            ORDER BY a.paid_at DESC NULLS LAST, a.email
-            LIMIT 500
-            """
-        )
-        seen: set = set()
-        out_rows: List[Dict[str, Any]] = []
-        for r in rows:
-            key = str(r.get("sheet_id") or r.get("email") or r.get("sheet_phone") or "")
-            if key in seen:
-                continue
-            seen.add(key)
-            out_rows.append(
-                {
-                    "sheet_id": r.get("sheet_id"),
-                    "email": r.get("email"),
-                    "phone": r.get("phone") or r.get("sheet_phone"),
-                    "lead_name": r.get("lead_name") or r.get("student_name"),
-                    "partner": r.get("partner"),
-                    "campus_code": r.get("campus_code"),
-                    "semester": r.get("semester"),
-                    "amount_inr": r.get("amount_inr"),
-                    "paid_at": r.get("paid_at"),
-                    "status": r.get("status"),
-                    "order_id": r.get("order_id"),
-                    "payment_id": r.get("payment_id"),
-                }
-            )
-
-        return {
+        result = {
             "has_sheet": True,
             "total_paid": total_paid,
             "verified_sem1": fee_status.get("verified", 0),
@@ -4239,6 +4287,8 @@ class AnalyticsEngine:
             "fee_status": fee_status,
             "rows": out_rows,
         }
+        self.cache.set("dp_admissions", cache_key, result)
+        return result
 
     def get_campus_admissions(self, filters: FilterParams) -> Dict[str, Any]:
         """All paid admissions; enrich region/gender from block payment via email/phone."""

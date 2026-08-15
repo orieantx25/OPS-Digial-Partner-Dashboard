@@ -383,7 +383,9 @@ export default function ExecutivePage() {
             height={funnelChartHeight}
             onCategoryClick={(partner) => {
               if (leadership) {
-                router.push(`/partner?partner=${encodeURIComponent(partner)}`);
+                router.push(
+                  `/digital-partner/partner?partner=${encodeURIComponent(partner)}`
+                );
                 return;
               }
               setDrillDown({ partner });

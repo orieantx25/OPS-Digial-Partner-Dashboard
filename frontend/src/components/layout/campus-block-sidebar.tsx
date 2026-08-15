@@ -44,7 +44,7 @@ export function CampusBlockSidebar() {
           className="w-full h-auto object-contain"
         />
         <div className="text-text-secondary text-[10px] uppercase tracking-widest mt-2">
-          Campus block amount
+          Campus and admission Dashboard
         </div>
       </div>
       <nav className="flex-1 overflow-y-auto py-2">

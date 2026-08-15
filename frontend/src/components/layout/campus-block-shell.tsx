@@ -59,7 +59,7 @@ export function CampusBlockShell({ children }: { children: React.ReactNode }) {
                 {pageTitle}
               </div>
               <div className="text-[10px] uppercase tracking-widest text-text-secondary truncate">
-                Campus block amount
+                Campus and admission Dashboard
               </div>
             </div>
           </div>

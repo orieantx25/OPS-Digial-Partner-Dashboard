@@ -232,12 +232,7 @@ export default function CampusAdmissionsPage() {
                   : `${formatNumber(rows.length)} rows from All Payments · region/gender from block sheet`
               }
             />
-            {isStaticDataMode() ? (
-              <p className="text-sm text-text-secondary">
-                Leadership snapshots include fee status and campus/gender charts without student-level
-                rows.
-              </p>
-            ) : (
+            {isStaticDataMode() ? null : (
               <DataTable
                 data={rows}
                 columns={columns}

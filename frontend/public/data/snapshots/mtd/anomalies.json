@@ -1,1 +1,1 @@
-[]
+[{"alert_type":"anomaly_partner_leads_low","severity":"warning","title":"College Dunia: low weekly leads","message":"Latest week 1 vs avg 225 (-100%)","metric_value":1.0,"threshold":225.33333333333334,"created_at":"2026-08-17T06:31:47.860488"},{"alert_type":"anomaly_partner_leads_low","severity":"warning","title":"Kollege Apply: low weekly leads","message":"Latest week 1390 vs avg 13109 (-89%)","metric_value":1390.0,"threshold":13109.333333333334,"created_at":"2026-08-17T06:31:47.860488"}]

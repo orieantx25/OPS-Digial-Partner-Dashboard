@@ -48,7 +48,7 @@ const DASHBOARDS = [
     id: 'admission-journey',
     title: 'Admission Journey',
     description:
-      'Every All Payments student from original contact source through UTM, payment, and campus.',
+      'Back track all admissions and block Paid students',
     href: '/admission-journey',
     icon: Route,
     external: false,
@@ -152,7 +152,7 @@ export default function PortalHubPage() {
                   <Icon className="h-5 w-5 text-primary" strokeWidth={1.75} />
                 </div>
                 <h2 className="text-lg font-semibold tracking-tight mb-2 pr-6">{card.title}</h2>
-                <p className="text-sm text-text-secondary leading-relaxed flex-1">
+                <p className="text-sm text-text-secondary leading-relaxed flex-1 line-clamp-2">
                   {card.description}
                 </p>
                 <div className="mt-5 flex items-center justify-between gap-3 pt-4 border-t border-border/60">

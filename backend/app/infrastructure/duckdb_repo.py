@@ -11,6 +11,11 @@ import duckdb
 
 from app.config import Settings, get_settings
 from app.domain.schema import (
+    ADMISSION_JOURNEY_BOOLEAN_COLUMNS,
+    ADMISSION_JOURNEY_COLUMNS,
+    ADMISSION_JOURNEY_META_FILE,
+    ADMISSION_JOURNEY_PARQUET_FILE,
+    ADMISSION_JOURNEY_TABLE,
     ADMISSIONS_COLUMNS,
     ADMISSIONS_LMS_COLUMNS,
     ADMISSIONS_LMS_META_FILE,
@@ -62,9 +67,11 @@ class DuckDBRepository:
         self.admissions_meta_path = self.settings.parquet_dir / ADMISSIONS_META_FILE
         self.admissions_lms_path = self.settings.parquet_dir / ADMISSIONS_LMS_PARQUET_FILE
         self.admissions_lms_meta_path = self.settings.parquet_dir / ADMISSIONS_LMS_META_FILE
+        self.admission_journey_path = self.settings.parquet_dir / ADMISSION_JOURNEY_PARQUET_FILE
+        self.admission_journey_meta_path = self.settings.parquet_dir / ADMISSION_JOURNEY_META_FILE
         self.duckdb_path = self.settings.duckdb_path
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
-        self._view_stamp: Optional[Tuple[float, float, float, float, float, float]] = None
+        self._view_stamp: Optional[Tuple[float, ...]] = None
         self._row_count_cache: Optional[int] = None
         self._columns_cache: Optional[List[str]] = None
 
@@ -99,7 +106,7 @@ class DuckDBRepository:
         except OSError:
             return 0.0
 
-    def _current_view_stamp(self) -> Tuple[float, float, float, float, float, float]:
+    def _current_view_stamp(self) -> Tuple[float, ...]:
         return (
             self._file_mtime(self.parquet_path),
             self._file_mtime(self.block_payment_path),
@@ -107,6 +114,7 @@ class DuckDBRepository:
             self._file_mtime(self.refund_path),
             self._file_mtime(self.admissions_path),
             self._file_mtime(self.admissions_lms_path),
+            self._file_mtime(self.admission_journey_path),
         )
 
     def _get_conn(self) -> duckdb.DuckDBPyConnection:
@@ -120,6 +128,7 @@ class DuckDBRepository:
             self.register_refund_view(self._conn)
             self.register_admissions_view(self._conn)
             self.register_admissions_lms_view(self._conn)
+            self.register_admission_journey_view(self._conn)
             self._view_stamp = stamp
             self._row_count_cache = None
             self._columns_cache = None
@@ -147,6 +156,9 @@ class DuckDBRepository:
 
     def admissions_lms_exists(self) -> bool:
         return self.admissions_lms_path.exists()
+
+    def admission_journey_exists(self) -> bool:
+        return self.admission_journey_path.exists()
 
     def _unlink_block_payment_files(self) -> None:
         if self.block_payment_path.exists():
@@ -257,6 +269,15 @@ class DuckDBRepository:
         parts = [f"CAST(NULL AS VARCHAR) AS {col}" for col in ADMISSIONS_LMS_COLUMNS]
         return f"SELECT {', '.join(parts)} WHERE 1=0"
 
+    def _empty_admission_journey_select_sql(self) -> str:
+        parts: List[str] = []
+        for col in ADMISSION_JOURNEY_COLUMNS:
+            if col in ADMISSION_JOURNEY_BOOLEAN_COLUMNS:
+                parts.append(f"CAST(NULL AS BOOLEAN) AS {col}")
+            else:
+                parts.append(f"CAST(NULL AS VARCHAR) AS {col}")
+        return f"SELECT {', '.join(parts)} WHERE 1=0"
+
     def _parquet_column_names(
         self, conn: duckdb.DuckDBPyConnection, path: Path
     ) -> set:
@@ -362,6 +383,24 @@ class DuckDBRepository:
             conn.execute(
                 f"CREATE OR REPLACE VIEW {ADMISSIONS_LMS_TABLE} AS "
                 f"{self._empty_admissions_lms_select_sql()}"
+            )
+
+    def register_admission_journey_view(self, conn: duckdb.DuckDBPyConnection) -> None:
+        if self.admission_journey_exists():
+            existing = self._parquet_column_names(conn, self.admission_journey_path)
+            select_sql = self._select_sql_for_expected_columns(
+                self.admission_journey_path,
+                ADMISSION_JOURNEY_COLUMNS,
+                existing,
+                boolean_cols=ADMISSION_JOURNEY_BOOLEAN_COLUMNS,
+            )
+            conn.execute(
+                f"CREATE OR REPLACE VIEW {ADMISSION_JOURNEY_TABLE} AS {select_sql}"
+            )
+        else:
+            conn.execute(
+                f"CREATE OR REPLACE VIEW {ADMISSION_JOURNEY_TABLE} AS "
+                f"{self._empty_admission_journey_select_sql()}"
             )
 
     def register_master_view(self, conn: duckdb.DuckDBPyConnection) -> None:

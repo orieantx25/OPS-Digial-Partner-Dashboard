@@ -318,6 +318,21 @@ class LeadSquaredSyncService:
                     if len(lead_frames) > 1
                     else lead_frames[0]
                 )
+                try:
+                    from app.services.pipeline_overview_service import (
+                        PipelineOverviewService,
+                    )
+
+                    PipelineOverviewService(
+                        duck_repo=self.duck_repo,
+                        settings=self.settings,
+                    ).ingest_unfiltered_leads(
+                        raw_leads,
+                        replace=replace,
+                        only_if_exists=not replace,
+                    )
+                except Exception as exc:
+                    logger.warning("pipeline_crm_snapshot_skipped", error=str(exc))
                 emit(52, "Ingesting leads")
                 leads_result = self.ingestion.process_lsq_sync_batch(
                     raw_leads,

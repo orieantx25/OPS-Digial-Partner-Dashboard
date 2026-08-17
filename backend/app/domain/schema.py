@@ -564,6 +564,80 @@ ADMISSIONS_LMS_COLUMNS: List[str] = [
     "source_filename",
 ]
 
+# Isolated admission-journey store (not part of MASTER_DATASET).
+ADMISSION_JOURNEY_TABLE = "admission_journey"
+ADMISSION_JOURNEY_PARQUET_FILE = "admission_journey.parquet"
+ADMISSION_JOURNEY_META_FILE = "admission_journey_meta.json"
+
+ADMISSION_JOURNEY_BOOLEAN_COLUMNS: Set[str] = {
+    "sheet_is_paid",
+    "lsq_matched",
+    "is_clash",
+    "clash_at_block",
+    "clash_at_admission",
+}
+
+ADMISSION_JOURNEY_COLUMNS: List[str] = [
+    "journey_id",
+    "sheet_id",
+    "student_name",
+    "email",
+    "phone",
+    "match_email",
+    "match_phone",
+    "campus_code",
+    "college_code",
+    "college_name",
+    "sheet_status",
+    "sheet_is_paid",
+    "amount_inr",
+    "paid_at",
+    "dop",
+    "block_amount_paid_sheet",
+    "block_payment_status",
+    "contact_source_sheet",
+    "original_utm_medium",
+    "original_utm_campaign",
+    "utm_activity",
+    "source_at_payment",
+    "campaign_at_payment",
+    "recent_utm",
+    "lms_status",
+    "lms_campus",
+    "lms_semester",
+    "lms_payable_inr",
+    "lms_verified_paid_inr",
+    "lms_verified_on",
+    "lms_paid_on",
+    "lms_submitted_on",
+    "lsq_matched",
+    "lsq_prospect_id",
+    "lsq_source",
+    "lsq_medium",
+    "lsq_campaign",
+    "lsq_prospect_stage",
+    "lsq_lead_stage",
+    "lsq_created_on",
+    "lsq_modified_on",
+    "sheet_created_at",
+    "sheet_updated_at",
+    "channel",
+    "is_clash",
+    "clash_at_block",
+    "clash_at_admission",
+    "synced_at",
+]
+
+# Isolated full-CRM LSQ pipeline store. Not MASTER_DATASET and not admission_journey.
+PIPELINE_CRM_TABLE = "pipeline_crm"
+PIPELINE_CRM_PARQUET_FILE = "pipeline_crm.parquet"
+PIPELINE_CRM_META_FILE = "pipeline_crm_meta.json"
+PIPELINE_CRM_COLUMNS: List[str] = [
+    "prospect_id",
+    "contact_stage",
+    "lead_stage",
+]
+
 BOOLEAN_COLUMNS: Set[str] = {
     "is_refund",
     "is_paid",

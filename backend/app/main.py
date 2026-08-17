@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import admissions, analytics, auth, block_payment, persona_activity, refunds, sync, upload
+from app.api.routes import admissions, admission_journey, analytics, auth, block_payment, persona_activity, refunds, sync, upload
 from app.config import get_settings
 from app.infrastructure.database import init_metadata_db
 from app.logging_config import get_logger, setup_logging
@@ -67,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(block_payment.router, prefix=prefix)
     app.include_router(refunds.router, prefix=prefix)
     app.include_router(admissions.router, prefix=prefix)
+    app.include_router(admission_journey.router, prefix=prefix)
     app.include_router(persona_activity.router, prefix=prefix)
     app.include_router(sync.router, prefix=prefix)
     app.include_router(analytics.router, prefix=prefix)

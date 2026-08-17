@@ -43,8 +43,9 @@ function columnMeta(col: { columnDef: { meta?: unknown } }): ColumnMeta {
 
 function columnWidth(col: { columnDef: { meta?: unknown } }, total: number): string {
   const meta = columnMeta(col);
-  if (meta.minWidth) return `minmax(${meta.minWidth}px, 1fr)`;
-  return meta.width ?? `${100 / Math.max(total, 1)}%`;
+  if (meta.minWidth) return `${meta.minWidth}px`;
+  if (meta.width) return meta.width;
+  return `${100 / Math.max(total, 1)}%`;
 }
 
 function headerLabel(col: ColumnDef<object>): string {
@@ -95,12 +96,13 @@ export function DataTable<T extends object>({
     getFilteredRowModel: getFilteredRowModel(),
   });
 
+  const ROW_PX = 40;
   const { rows } = table.getRowModel();
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => (useCards ? 88 : 40),
-    overscan: 10,
+    estimateSize: () => (useCards ? 88 : ROW_PX),
+    overscan: 12,
   });
 
   const visibleColumns = table.getVisibleLeafColumns();
@@ -109,8 +111,16 @@ export function DataTable<T extends object>({
     [visibleColumns]
   );
   const tableMinWidth = useMemo(() => {
-    const mins = visibleColumns.map((col) => columnMeta(col).minWidth ?? 96);
-    return Math.max(640, mins.reduce((sum, n) => sum + n, 0));
+    const mins = visibleColumns.map((col) => {
+      const meta = columnMeta(col);
+      if (meta.minWidth) return meta.minWidth;
+      const width = meta.width;
+      if (typeof width === 'string' && width.endsWith('px')) {
+        return Number.parseInt(width, 10) || 96;
+      }
+      return 110;
+    });
+    return Math.max(720, mins.reduce((sum, n) => sum + n, 0));
   }, [visibleColumns]);
 
   const handleExport = useCallback(() => {
@@ -124,7 +134,6 @@ export function DataTable<T extends object>({
     downloadBlob(`${headers}\n${body}`, exportFilename);
   }, [rows, table, exportFilename]);
 
-  const ROW_PX = 40;
   const emptyPx = 64;
   const contentHeight =
     rows.length === 0
@@ -210,7 +219,14 @@ export function DataTable<T extends object>({
           )}
         </div>
       ) : (
-        <div className="overflow-x-auto">
+        <div
+          ref={parentRef}
+          className="overflow-auto overscroll-contain"
+          style={{
+            height: scrollHeight,
+            overflowY: height === 'auto' ? 'hidden' : 'auto',
+          }}
+        >
           <div style={{ minWidth: tableMinWidth }}>
             <div
               className="grid border-b border-border bg-panel sticky top-0 z-10"
@@ -229,19 +245,38 @@ export function DataTable<T extends object>({
               ))}
             </div>
 
-            <div
-              ref={parentRef}
-              style={{
-                height: scrollHeight,
-                overflowY: height === 'auto' ? 'visible' : 'auto',
-                overflowX: 'hidden',
-              }}
-            >
-              {rows.length === 0 ? (
-                <div className="p-8 text-center text-text-secondary text-sm">No data</div>
-              ) : height === 'auto' ? (
-                <div>
-                  {rows.map((row) => (
+            {rows.length === 0 ? (
+              <div className="p-8 text-center text-text-secondary text-sm">No data</div>
+            ) : height === 'auto' ? (
+              <div>
+                {rows.map((row) => (
+                  <div
+                    key={row.id}
+                    role="row"
+                    className={cn(
+                      'grid border-b border-border/50 hover:bg-surface items-center',
+                      onRowClick && 'cursor-pointer'
+                    )}
+                    style={{ gridTemplateColumns, minHeight: ROW_PX }}
+                    onClick={() => onRowClick?.(row.original)}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <div
+                        key={cell.id}
+                        role="cell"
+                        className="px-3 py-2 text-sm text-text-secondary truncate min-w-0"
+                      >
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
+                {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                  const row = rows[virtualRow.index];
+                  return (
                     <div
                       key={row.id}
                       role="row"
@@ -249,7 +284,15 @@ export function DataTable<T extends object>({
                         'grid border-b border-border/50 hover:bg-surface items-center',
                         onRowClick && 'cursor-pointer'
                       )}
-                      style={{ gridTemplateColumns, minHeight: ROW_PX }}
+                      style={{
+                        gridTemplateColumns,
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: virtualRow.size,
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
                       onClick={() => onRowClick?.(row.original)}
                     >
                       {row.getVisibleCells().map((cell) => (
@@ -262,46 +305,10 @@ export function DataTable<T extends object>({
                         </div>
                       ))}
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
-                  {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                    const row = rows[virtualRow.index];
-                    return (
-                      <div
-                        key={row.id}
-                        role="row"
-                        className={cn(
-                          'grid border-b border-border/50 hover:bg-surface items-center',
-                          onRowClick && 'cursor-pointer'
-                        )}
-                        style={{
-                          gridTemplateColumns,
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          width: '100%',
-                          height: virtualRow.size,
-                          transform: `translateY(${virtualRow.start}px)`,
-                        }}
-                        onClick={() => onRowClick?.(row.original)}
-                      >
-                        {row.getVisibleCells().map((cell) => (
-                          <div
-                            key={cell.id}
-                            role="cell"
-                            className="px-3 py-2 text-sm text-text-secondary truncate min-w-0"
-                          >
-                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}

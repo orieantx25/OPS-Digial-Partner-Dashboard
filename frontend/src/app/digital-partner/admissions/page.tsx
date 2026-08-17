@@ -236,21 +236,14 @@ export default function AdmissionsPage() {
 
       <SectionHeader
         title="DP admissions"
-        subtitle={
-          leadership
-            ? `${formatNumber(data?.dp_matched ?? 0)} matched · partner totals only on leadership`
-            : `${formatNumber(rows.length)} rows · email/phone match to digital-partner LSQ leads`
-        }
+        subtitle={`${formatNumber(leadership ? data?.dp_matched ?? 0 : rows.length)} ${
+          leadership ? 'matched' : 'rows'
+        }`}
       />
 
       {loading && !data ? (
         <p className="text-text-secondary text-sm">Loading...</p>
-      ) : leadership ? (
-        <p className="text-sm text-text-secondary border border-border/60 bg-surface/50 px-3 py-2 rounded-sm">
-          Leadership view shows Sem1 LMS fee status and partner-matched admission totals.
-          Student-level rows are omitted from published snapshots.
-        </p>
-      ) : (
+      ) : leadership ? null : (
         <DataTable
           data={rows}
           columns={columns}

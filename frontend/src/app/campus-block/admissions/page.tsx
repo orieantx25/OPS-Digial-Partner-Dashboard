@@ -226,11 +226,9 @@ export default function CampusAdmissionsPage() {
           <section className="space-y-3 panel p-4 sm:p-5 border border-border">
             <SectionHeader
               title="Admission payments"
-              subtitle={
-                isStaticDataMode()
-                  ? `${formatNumber(data?.total_paid ?? 0)} paid · aggregates only on leadership`
-                  : `${formatNumber(rows.length)} rows from All Payments · region/gender from block sheet`
-              }
+              subtitle={`${formatNumber(
+                isStaticDataMode() ? data?.total_paid ?? 0 : rows.length
+              )} ${isStaticDataMode() ? 'paid' : 'rows'}`}
             />
             {isStaticDataMode() ? null : (
               <DataTable

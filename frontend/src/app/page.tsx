@@ -10,6 +10,7 @@ import {
   IndianRupee,
   LayoutDashboard,
   Loader2,
+  Route,
   Undo2,
 } from 'lucide-react';
 import { usePortalAuthStore } from '@/store/portal-auth-store';
@@ -41,6 +42,15 @@ const DASHBOARDS = [
       'Refund sheet KPIs, retained vs processed vs refunded, and campus distribution.',
     href: '/refund-cases',
     icon: Undo2,
+    external: false,
+  },
+  {
+    id: 'admission-journey',
+    title: 'Admission Journey',
+    description:
+      'Every All Payments student from original contact source through UTM, payment, and campus.',
+    href: '/admission-journey',
+    icon: Route,
     external: false,
   },
   {

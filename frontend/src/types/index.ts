@@ -584,3 +584,181 @@ export interface CampusAdmissionsSummary {
   fee_status?: AdmissionsFeeStatus;
   rows: CampusAdmissionRow[];
 }
+
+export type AdmissionJourneyChannel =
+  | 'digital_partner'
+  | 'counsellor'
+  | 'other'
+  | 'unmatched_lsq';
+
+export interface AdmissionJourneyStatus {
+  has_data: boolean;
+  row_count: number;
+  unmatched_lsq: number;
+  clash_count: number;
+  clash_at_block?: number;
+  clash_at_admission?: number;
+  paid_count: number;
+  unpaid_count?: number;
+  dp_count?: number;
+  counsellor_count?: number;
+  other_count?: number;
+  campuses: string[];
+  last_synced_at: string | null;
+  admissions_loaded: boolean;
+  lsq_configured: boolean;
+  clash_cutoff: string;
+  sync_job?: {
+    job_id: string;
+    status: string;
+    percent: number;
+    message?: string;
+    report?: {
+      synced?: number;
+      total?: number;
+      failed?: number;
+      unmatched_lsq?: number;
+    } | null;
+    error?: string | null;
+  } | null;
+}
+
+export interface AdmissionJourneyRow {
+  journey_id: string;
+  student_name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  campus?: string | null;
+  campus_code?: string | null;
+  sheet_status?: string | null;
+  sheet_is_paid?: boolean;
+  amount_inr?: string | null;
+  lsq_prospect_stage?: string | null;
+  lsq_lead_stage?: string | null;
+  lsq_source?: string | null;
+  lsq_created_on?: string | null;
+  lsq_modified_on?: string | null;
+  contact_source_sheet?: string | null;
+  source_at_payment?: string | null;
+  campaign_at_payment?: string | null;
+  original_utm_medium?: string | null;
+  original_utm_campaign?: string | null;
+  lms_status?: string | null;
+  lsq_stage_label?: string | null;
+  channel: AdmissionJourneyChannel | string;
+  is_clash: boolean;
+  clash_at_block?: boolean;
+  clash_at_admission?: boolean;
+  lsq_matched: boolean;
+  block_payment_done?: boolean;
+  sem_fee_under_review?: boolean;
+  sem_fee_verified?: boolean;
+  refund_case?: boolean;
+}
+
+export interface AdmissionJourneyField {
+  label: string;
+  lsq?: string | null;
+  sheet?: string | null;
+  mismatch: boolean;
+  empty: boolean;
+}
+
+export interface AdmissionJourneyPathStep {
+  key: string;
+  label: string;
+  lsq?: string | null;
+  sheet?: string | null;
+  date?: string | null;
+  mismatch: boolean;
+  empty: boolean;
+  fields?: AdmissionJourneyField[];
+}
+
+export interface AdmissionJourneyStageChip {
+  key: string;
+  label: string;
+  reached: boolean;
+  at?: string | null;
+  detail?: string | null;
+}
+
+export interface AdmissionJourneyDetail {
+  header: {
+    journey_id: string;
+    name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    campus?: string | null;
+    campus_code?: string | null;
+    college_code?: string | null;
+    college_name?: string | null;
+    sheet_paid: boolean;
+    sheet_status?: string | null;
+    lms_status?: string | null;
+    channel: string;
+    clash: boolean;
+    clash_at_block?: boolean;
+    clash_at_admission?: boolean;
+    clash_note?: string | null;
+    clash_with?: string | null;
+    unmatched_lsq: boolean;
+    lsq_prospect_id?: string | null;
+    lsq_created_on?: string | null;
+    lsq_modified_on?: string | null;
+    lsq_source?: string | null;
+    lsq_medium?: string | null;
+    lsq_campaign?: string | null;
+    lsq_prospect_stage?: string | null;
+    lsq_lead_stage?: string | null;
+    lsq_stage_label?: string | null;
+    contact_source_sheet?: string | null;
+    original_utm_medium?: string | null;
+    original_utm_campaign?: string | null;
+    source_at_payment?: string | null;
+    campaign_at_payment?: string | null;
+    amount_inr?: string | null;
+    block_amount?: string | null;
+    lms_verified_paid_inr?: string | null;
+    lms_payable_inr?: string | null;
+    paid_at?: string | null;
+    dop?: string | null;
+    lms_verified_on?: string | null;
+    lms_paid_on?: string | null;
+    lms_submitted_on?: string | null;
+    sheet_created_at?: string | null;
+    sheet_updated_at?: string | null;
+    block_payment_done?: boolean;
+    sem_fee_under_review?: boolean;
+    sem_fee_verified?: boolean;
+    refund_case?: boolean;
+    refund_status?: string | null;
+  };
+  path: AdmissionJourneyPathStep[];
+  stages: AdmissionJourneyStageChip[];
+  events: { key: string; label: string; at: string }[];
+}
+
+export interface PipelineOverviewStep {
+  key: string;
+  label: string;
+  reached: number;
+  at_stage: number;
+  conversion_from_previous_pct?: number | null;
+  substages?: { label: string; count: number }[];
+  lsq_labels: { label: string; count: number }[];
+  source?: string;
+}
+
+export interface PipelineOverview {
+  has_data: boolean;
+  lsq_loaded: boolean;
+  lms_loaded?: boolean;
+  total_leads: number;
+  admissions: number;
+  last_synced_at?: string | null;
+  source?: string;
+  steps: PipelineOverviewStep[];
+  note?: string;
+  sync_job?: UploadJob | null;
+}

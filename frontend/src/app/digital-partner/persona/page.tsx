@@ -129,7 +129,7 @@ export default function PersonaPage() {
         subtitle={
           uploadsEnabled
             ? 'Headers: Prospect Id, Email Address, Phone Number, Contact Name, Activity Id, Activity Date, Activity Modified On, Notes'
-            : 'View-only — report is refreshed by an admin'
+            : undefined
         }
         action={
           uploadsEnabled && sheetLoaded ? (

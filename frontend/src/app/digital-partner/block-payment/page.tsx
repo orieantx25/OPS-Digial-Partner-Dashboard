@@ -218,10 +218,7 @@ export default function BlockPaymentPage() {
         totalRows={totalBlockPaid > 0 ? totalBlockPaid : undefined}
       />
 
-      <SectionHeader
-        title="Block Amount Paid Sheet"
-        subtitle={uploadsEnabled ? undefined : 'View-only — sheet is refreshed by an admin'}
-      />
+      <SectionHeader title="Block Amount Paid Sheet" />
 
       <div className="panel p-4 space-y-3">
         {sheetStatus?.has_data && (
@@ -329,9 +326,7 @@ export default function BlockPaymentPage() {
         )}
 
         {!uploadsEnabled && !sheetStatus?.has_data && (
-          <p className="text-sm text-text-secondary">
-            No block payment sheet loaded yet. An admin must upload it from the local app.
-          </p>
+          <p className="text-sm text-text-secondary">No block payment data yet.</p>
         )}
       </div>
 

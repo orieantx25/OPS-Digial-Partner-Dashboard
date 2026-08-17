@@ -2,7 +2,14 @@
  * Static snapshot client — maps api.* calls to /data/snapshots JSON files.
  */
 
-import type { FilterParams } from '@/types';
+import type {
+  AdmissionJourneyDetail,
+  AdmissionJourneyRow,
+  AdmissionJourneyStatus,
+  FilterParams,
+  PaginatedResponse,
+  PipelineOverview,
+} from '@/types';
 import {
   fetchSnapshotJson,
   getSnapshotManifest,
@@ -36,6 +43,75 @@ async function partnerFile(
   // Last resort: naive slug (may 404)
   const naive = partner.replace(/[^\w\-]+/g, '_').replace(/^_|_$/g, '') || 'partner';
   return `${id}/partner__${naive}.json`;
+}
+
+function paginateRows<T>(
+  items: T[],
+  page: number,
+  pageSize: number
+): PaginatedResponse<T> {
+  const total = items.length;
+  const totalPages = pageSize ? Math.ceil(total / pageSize) : 0;
+  const start = Math.max(page - 1, 0) * pageSize;
+  return {
+    items: items.slice(start, start + pageSize),
+    total,
+    page,
+    page_size: pageSize,
+    total_pages: totalPages,
+  };
+}
+
+function filterJourneyRows(
+  items: AdmissionJourneyRow[],
+  params: {
+    campus?: string;
+    clash?: string;
+    paid?: string;
+    channel?: string;
+    search?: string;
+  }
+): AdmissionJourneyRow[] {
+  let rows = items;
+  const campus = params.campus?.trim().toLowerCase();
+  if (campus) {
+    rows = rows.filter((row) =>
+      String(row.campus || row.campus_code || '').toLowerCase().includes(campus)
+    );
+  }
+  if (
+    params.clash === 'true' ||
+    params.clash === '1' ||
+    params.clash === 'yes' ||
+    params.clash === 'any'
+  ) {
+    rows = rows.filter((row) => Boolean(row.is_clash));
+  } else if (params.clash === 'block' || params.clash === 'clash_at_block') {
+    rows = rows.filter((row) => Boolean(row.clash_at_block));
+  } else if (params.clash === 'admission' || params.clash === 'clash_at_admission') {
+    rows = rows.filter((row) => Boolean(row.clash_at_admission));
+  } else if (params.clash === 'false' || params.clash === '0' || params.clash === 'no') {
+    rows = rows.filter((row) => !row.is_clash);
+  }
+  if (params.paid === 'true' || params.paid === '1' || params.paid === 'yes') {
+    rows = rows.filter((row) => Boolean(row.sheet_is_paid));
+  } else if (params.paid === 'false' || params.paid === '0' || params.paid === 'no') {
+    rows = rows.filter((row) => !row.sheet_is_paid);
+  }
+  if (params.channel && params.channel !== 'all') {
+    rows = rows.filter((row) => row.channel === params.channel);
+  }
+  const search = params.search?.trim();
+  if (search) {
+    const needle = search.toLowerCase();
+    rows = rows.filter((row) => {
+      const name = String(row.student_name || '').toLowerCase();
+      const email = String(row.email || '').toLowerCase();
+      const phone = String(row.phone || '');
+      return name.includes(needle) || email.includes(needle) || phone.includes(search);
+    });
+  }
+  return rows;
 }
 
 export const staticApi = {
@@ -97,6 +173,59 @@ export const staticApi = {
   getRefundStatus: () => fetchSnapshotJson('refund_status.json'),
 
   getAdmissionsStatus: () => fetchSnapshotJson('admissions_status.json'),
+
+  getAdmissionJourneyStatus: () =>
+    fetchSnapshotJson<AdmissionJourneyStatus>('admission_journey_status.json'),
+
+  startAdmissionJourneySync: async () => {
+    throw new Error('Sync is only available locally');
+  },
+
+  getAdmissionJourneySyncJob: async () => {
+    throw new Error('Sync is only available locally');
+  },
+
+  getAdmissionJourneyStudents: async (params: {
+    campus?: string;
+    clash?: string;
+    paid?: string;
+    channel?: string;
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  } = {}) => {
+    const items = await fetchSnapshotJson<AdmissionJourneyRow[]>(
+      'admission_journey_students.json'
+    );
+    const page = params.page ?? 1;
+    const pageSize = params.pageSize ?? 50;
+    return paginateRows(filterJourneyRows(items, params), page, pageSize);
+  },
+
+  getAdmissionJourneyStudent: async (id: string) => {
+    const details = await fetchSnapshotJson<Record<string, AdmissionJourneyDetail>>(
+      'admission_journey_details.json'
+    );
+    const detail = details[id];
+    if (!detail) {
+      throw new Error('Student journey not found');
+    }
+    return detail;
+  },
+
+  getPipelineOverview: async () => {
+    const overview = await fetchSnapshotJson<PipelineOverview>('pipeline_overview.json');
+    const { note: _note, ...rest } = overview;
+    return rest;
+  },
+
+  startPipelineOverviewSync: async () => {
+    throw new Error('Sync is only available locally');
+  },
+
+  getPipelineOverviewSyncJob: async () => {
+    throw new Error('Sync is only available locally');
+  },
 
   getDpAdmissions: (filters: FilterParams) => scoped(filters, 'admissions_dp.json'),
 

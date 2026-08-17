@@ -1,6 +1,10 @@
 import {
   AlertItem,
   AdmissionsSheetStatus,
+  AdmissionJourneyDetail,
+  AdmissionJourneyRow,
+  AdmissionJourneyStatus,
+  PipelineOverview,
   BlankCampusRow,
   BlockPaymentBacktracking,
   BlockPaymentSheetStatus,
@@ -208,6 +212,54 @@ const liveApi = {
   },
 
   getAdmissionsStatus: () => request<AdmissionsSheetStatus>('/admissions/status'),
+
+  getAdmissionJourneyStatus: () =>
+    request<AdmissionJourneyStatus>('/admission-journey/status'),
+
+  startAdmissionJourneySync: () =>
+    request<{ job_id: string; status: string }>('/admission-journey/sync', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
+  getAdmissionJourneySyncJob: (jobId: string) =>
+    request<UploadJob>(`/admission-journey/sync/${jobId}`),
+
+  getAdmissionJourneyStudents: (params: {
+    campus?: string;
+    clash?: string;
+    paid?: string;
+    channel?: string;
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  } = {}) =>
+    request<PaginatedResponse<AdmissionJourneyRow>>(
+      `/admission-journey/students${buildQuery({
+        campus: params.campus,
+        clash: params.clash,
+        paid: params.paid,
+        channel: params.channel,
+        search: params.search,
+        page: params.page ?? 1,
+        page_size: params.pageSize ?? 50,
+      })}`
+    ),
+
+  getAdmissionJourneyStudent: (id: string) =>
+    request<AdmissionJourneyDetail>(`/admission-journey/students/${id}`),
+
+  getPipelineOverview: () =>
+    request<PipelineOverview>('/admission-journey/pipeline-overview'),
+
+  startPipelineOverviewSync: () =>
+    request<{ job_id: string; status: string }>('/admission-journey/pipeline-overview/sync', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
+  getPipelineOverviewSyncJob: (jobId: string) =>
+    request<UploadJob>(`/admission-journey/pipeline-overview/sync/${jobId}`),
 
   uploadAdmissionsSheet: (file: File) => {
     const form = new FormData();

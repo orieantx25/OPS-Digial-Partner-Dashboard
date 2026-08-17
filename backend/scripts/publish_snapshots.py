@@ -37,6 +37,8 @@ from app.services.block_payment_service import BlockPaymentService  # noqa: E402
 from app.services.persona_activity_service import PersonaActivityService  # noqa: E402
 from app.services.refund_service import RefundService  # noqa: E402
 from app.services.admissions_service import AdmissionsService  # noqa: E402
+from app.services.admission_journey_service import AdmissionJourneyService  # noqa: E402
+from app.services.pipeline_overview_service import PipelineOverviewService  # noqa: E402
 
 OUT_DIR = REPO_ROOT / "frontend" / "public" / "data" / "snapshots"
 
@@ -209,6 +211,38 @@ def _partner_names(engine: AnalyticsEngine, filters: FilterParams, comparison: A
     return names
 
 
+def _publish_admission_journey(duck: DuckDBRepository, out_dir: Path) -> None:
+    """Write Admission Journey + pipeline overview snapshots (same UI as local)."""
+    journey_svc = AdmissionJourneyService(duck_repo=duck)
+    pipeline_svc = PipelineOverviewService(duck_repo=duck)
+
+    status = journey_svc.get_status()
+    _write_json(out_dir / "admission_journey_status.json", status)
+
+    students = journey_svc.list_students(page=1, page_size=50000)
+    items = students.get("items") or []
+    _write_json(out_dir / "admission_journey_students.json", items)
+
+    details: Dict[str, Any] = {}
+    for row in items:
+        jid = str(row.get("journey_id") or "").strip()
+        if not jid:
+            continue
+        detail = journey_svc.get_student(jid)
+        if detail:
+            details[jid] = detail
+    _write_json(out_dir / "admission_journey_details.json", details)
+
+    overview = pipeline_svc.get_overview()
+    if isinstance(overview, dict):
+        overview.pop("note", None)
+    _write_json(out_dir / "pipeline_overview.json", overview)
+    print(
+        f"  admission journey: {len(items)} students, "
+        f"{len(details)} details, pipeline has_data={overview.get('has_data')}"
+    )
+
+
 def publish() -> Path:
     if OUT_DIR.exists():
         shutil.rmtree(OUT_DIR)
@@ -236,6 +270,7 @@ def publish() -> Path:
     _write_json(OUT_DIR / "refund_status.json", refund_svc.get_status())
     _write_json(OUT_DIR / "admissions_status.json", admissions_svc.get_status())
     _write_json(OUT_DIR / "persona_activity_status.json", persona_svc.get_status())
+    _publish_admission_journey(duck, OUT_DIR)
 
     for scope_id, scope in scopes.items():
         print(f"Publishing scope={scope_id} …")
@@ -337,6 +372,10 @@ def publish() -> Path:
             "refund_status.json",
             "admissions_status.json",
             "persona_activity_status.json",
+            "admission_journey_status.json",
+            "admission_journey_students.json",
+            "admission_journey_details.json",
+            "pipeline_overview.json",
         ],
     }
     _write_json(OUT_DIR / "manifest.json", manifest)

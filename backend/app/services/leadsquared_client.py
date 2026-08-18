@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Iterator, List, Optional
 from urllib.parse import urlencode
 
@@ -14,12 +15,16 @@ from app.config import Settings, get_settings
 from app.logging_config import get_logger
 
 logger = get_logger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 LSQ_DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_PAGE_SIZE = 1000
+ACTIVITY_PAGE_SIZE = 200
+ACTIVITY_CHUNK_HOURS = 6
 MAX_PAGE_SIZE = 5000
-MAX_RETRIES = 3
+MAX_RETRIES = 5
 RETRY_BACKOFF_SECONDS = 2.0
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
 class LeadSquaredError(Exception):
@@ -35,6 +40,13 @@ def _redact_secrets(text: str, access_key: str, secret_key: str) -> str:
     redacted = re.sub(r"(accessKey=)[^&]+", r"\1***", redacted, flags=re.IGNORECASE)
     redacted = re.sub(r"(secretKey=)[^&]+", r"\1***", redacted, flags=re.IGNORECASE)
     return redacted
+
+
+def _is_retryable_error(status_code: int, body: str) -> bool:
+    if status_code in RETRYABLE_STATUS:
+        return True
+    blob = (body or "").lower()
+    return "mysqlexception" in blob or "error processing the request" in blob
 
 
 def format_lsq_datetime(dt: datetime) -> str:
@@ -99,12 +111,22 @@ class LeadSquaredClient:
             for attempt in range(MAX_RETRIES):
                 try:
                     response = client.post(url, json=body)
-                    if response.status_code == 429:
-                        time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+                    body_text = response.text or ""
+                    retryable = _is_retryable_error(response.status_code, body_text)
+                    if retryable and attempt < MAX_RETRIES - 1:
+                        wait = RETRY_BACKOFF_SECONDS * (2 ** attempt)
+                        logger.warning(
+                            "lsq_retry",
+                            status=response.status_code,
+                            attempt=attempt + 1,
+                            wait_s=wait,
+                            path=path,
+                        )
+                        time.sleep(wait)
                         continue
                     if response.status_code >= 400:
                         detail = _redact_secrets(
-                            response.text[:500],
+                            body_text[:500],
                             self._access_key,
                             self._secret_key,
                         )
@@ -113,6 +135,20 @@ class LeadSquaredClient:
                         )
                     data = response.json()
                     if isinstance(data, dict) and data.get("Status") == "Error":
+                        encoded = str(data)
+                        if attempt < MAX_RETRIES - 1 and _is_retryable_error(
+                            response.status_code, encoded
+                        ):
+                            wait = RETRY_BACKOFF_SECONDS * (2 ** attempt)
+                            logger.warning(
+                                "lsq_retry",
+                                status=response.status_code,
+                                attempt=attempt + 1,
+                                wait_s=wait,
+                                path=path,
+                            )
+                            time.sleep(wait)
+                            continue
                         msg = _redact_secrets(
                             str(data.get("ExceptionMessage") or data),
                             self._access_key,
@@ -122,7 +158,9 @@ class LeadSquaredClient:
                     return data if isinstance(data, dict) else {"data": data}
                 except httpx.HTTPError as exc:
                     last_exc = exc
-                    time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+                    if attempt < MAX_RETRIES - 1:
+                        time.sleep(RETRY_BACKOFF_SECONDS * (2 ** attempt))
+                        continue
             raise LeadSquaredError(
                 _redact_secrets(str(last_exc), self._access_key, self._secret_key)
             )
@@ -255,29 +293,35 @@ class LeadSquaredClient:
         to_date: datetime,
         page_size: Optional[int] = None,
     ) -> Iterator[List[Dict[str, Any]]]:
-        page_size = _clamp_page_size(page_size if page_size is not None else self.default_page_size)
-        page_index = 1
-        while True:
-            body = {
-                "Parameter": {
-                    "FromDate": format_lsq_datetime(from_date),
-                    "ToDate": format_lsq_datetime(to_date),
-                    "IncludeCustomFields": 1,
-                },
-                "Paging": {"PageIndex": page_index, "PageSize": page_size},
-                "Sorting": {"ColumnName": "CreatedOn", "Direction": 1},
-            }
-            payload = self._post(
-                "/ProspectActivity.svc/RetrieveRecentlyModified", body
-            )
-            activities = payload.get("ProspectActivities") or []
-            if not activities:
-                break
-            yield activities
-            # RecordCount is the total matching rows, not the page size.
-            if len(activities) < page_size:
-                break
-            total = int(payload.get("RecordCount") or 0)
-            if total and page_index * page_size >= total:
-                break
-            page_index += 1
+        """Yield activity pages in small windows — LSQ MySQL 500s on large activity queries."""
+        page_size = _clamp_page_size(
+            page_size if page_size is not None else ACTIVITY_PAGE_SIZE
+        )
+        cursor = from_date
+        while cursor < to_date:
+            window_end = min(cursor + timedelta(hours=ACTIVITY_CHUNK_HOURS), to_date)
+            page_index = 1
+            while True:
+                body = {
+                    "Parameter": {
+                        "FromDate": format_lsq_datetime(cursor),
+                        "ToDate": format_lsq_datetime(window_end),
+                        "IncludeCustomFields": 1,
+                    },
+                    "Paging": {"PageIndex": page_index, "PageSize": page_size},
+                    "Sorting": {"ColumnName": "CreatedOn", "Direction": 1},
+                }
+                payload = self._post(
+                    "/ProspectActivity.svc/RetrieveRecentlyModified", body
+                )
+                activities = payload.get("ProspectActivities") or []
+                if not activities:
+                    break
+                yield activities
+                if len(activities) < page_size:
+                    break
+                total = int(payload.get("RecordCount") or 0)
+                if total and page_index * page_size >= total:
+                    break
+                page_index += 1
+            cursor = window_end

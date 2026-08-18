@@ -6,14 +6,16 @@ import { usePathname } from 'next/navigation';
 import { LayoutGrid, Upload } from 'lucide-react';
 import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { cn } from '@/lib/utils';
-import { NAV_GROUPS, NAV_ICONS, NAV_PAGES } from '@/lib/nav';
+import { NAV_GROUPS, NAV_ICONS, visibleNavPages } from '@/lib/nav';
 import { useAppStore } from '@/store/app-store';
 import { useUploadStore } from '@/store/upload-store';
+import { isLeadershipMode } from '@/lib/static-mode';
 
 export function Sidebar() {
   const pathname = usePathname();
   const user = useAppStore((s) => s.user);
   const openUpload = useUploadStore((s) => s.openUpload);
+  const pagesForNav = visibleNavPages(isLeadershipMode());
 
   return (
     <aside className="hidden lg:flex fixed left-0 top-0 h-screen w-52 bg-surface border-r border-border flex-col z-30">
@@ -41,7 +43,7 @@ export function Sidebar() {
           </Link>
         </div>
         {NAV_GROUPS.map((group) => {
-          const pages = NAV_PAGES.filter((p) => p.group === group);
+          const pages = pagesForNav.filter((p) => p.group === group);
           if (!pages.length) return null;
           return (
             <div key={group} className="mb-2">

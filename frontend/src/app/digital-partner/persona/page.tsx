@@ -1,17 +1,17 @@
 'use client';
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { ColumnDef } from '@tanstack/react-table';
-import { AlertCircle, CheckCircle, Loader2, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
-import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { useFetch } from '@/hooks/use-fetch';
 import { useEffectiveFilters } from '@/store/app-store';
 import { DataTable } from '@/components/tables/data-table';
 import { ChartPanel } from '@/components/charts/chart-panel';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { ChartData, PersonaSummary } from '@/types';
-import { cn, formatNumber } from '@/lib/utils';
+import { formatNumber } from '@/lib/utils';
+import { isLeadershipMode } from '@/lib/static-mode';
 
 const SUMMARY_METRICS: { key: keyof PersonaSummary; label: string; accent?: boolean }[] = [
   { key: 'know_more_about_btech', label: 'Know More about B.Tech' },
@@ -33,54 +33,20 @@ const EMPTY_CHART: ChartData = {
   series: [{ name: 'Leads', data: [] }],
 };
 
-type UploadStep = 'idle' | 'uploading' | 'done' | 'error';
-
 export default function PersonaPage() {
+  const router = useRouter();
+  const leadership = isLeadershipMode();
   const filters = useEffectiveFilters();
-  const [sheetRefresh, setSheetRefresh] = useState(0);
-  const [uploadStep, setUploadStep] = useState<UploadStep>('idle');
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
-  const [dragging, setDragging] = useState(false);
-  const [showUpload, setShowUpload] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
 
-  const { data, refetch } = useFetch({
+  useEffect(() => {
+    if (leadership) router.replace('/digital-partner');
+  }, [leadership, router]);
+
+  const { data } = useFetch({
     fetcher: () => api.getPersona(filters),
-    deps: [JSON.stringify(filters), sheetRefresh],
+    deps: [JSON.stringify(filters)],
+    enabled: !leadership,
   });
-
-  const uploadFile = useCallback(
-    async (file: File) => {
-      setUploadStep('uploading');
-      setUploadError(null);
-      setUploadMessage(null);
-      try {
-        const result = await api.uploadPersonaActivitySheet(file);
-        setUploadMessage(result.message);
-        setUploadStep('done');
-        setSheetRefresh((n) => n + 1);
-        refetch();
-      } catch (e) {
-        setUploadError(e instanceof Error ? e.message : 'Upload failed');
-        setUploadStep('error');
-      }
-    },
-    [refetch]
-  );
-
-  const handleFiles = (incoming: FileList | File[]) => {
-    const allowed = ['.xlsx', '.xls', '.csv'];
-    const file = Array.from(incoming).find((f) =>
-      allowed.some((ext) => f.name.toLowerCase().endsWith(ext))
-    );
-    if (!file) {
-      setUploadError('Use an Excel (.xlsx, .xls) or CSV file.');
-      setUploadStep('error');
-      return;
-    }
-    uploadFile(file);
-  };
 
   const columns: ColumnDef<Record<string, unknown>>[] = [
     { accessorKey: 'persona', header: 'Persona' },
@@ -103,106 +69,26 @@ export default function PersonaPage() {
   const last24h = summary?.know_more_about_btech_last_24h ?? 0;
   const last24hShare = total > 0 ? (last24h / total) * 100 : 0;
 
-  const uploadsEnabled = canUpload();
-  const sheetLoaded = Boolean(activity?.has_data);
-
   const matchHint = useMemo(() => {
     if (!activity?.has_data) {
-      return uploadsEnabled
-        ? 'Upload or sync the persona activity report. Last 24h Interested counts Know More about B.Tech ' +
-            'activity events in the last 24 hours (Kollege Apply included). Created = leads created in the last 24 hours.'
-        : 'Persona activity data is managed by an admin. Charts below use whatever report is already loaded.';
+      return 'Stored persona snapshot. Last 24h Interested uses the saved activity report.';
     }
     return (
       `Report rows (Know More events, last 24h): ${formatNumber(activity.report_rows)} · ` +
       `Matched leads: ${formatNumber(activity.matched_leads)} · ` +
       `Unmatched: ${formatNumber(activity.unmatched_report_rows)}`
     );
-  }, [activity, uploadsEnabled]);
+  }, [activity]);
+
+  if (leadership) return null;
 
   return (
     <div className="space-y-4">
       <PageHeader title="Persona Analytics" />
 
-      <SectionHeader
-        title="Persona activity report (Last 24h)"
-        subtitle={
-          uploadsEnabled
-            ? 'Headers: Prospect Id, Email Address, Phone Number, Contact Name, Activity Id, Activity Date, Activity Modified On, Notes'
-            : undefined
-        }
-        action={
-          uploadsEnabled && sheetLoaded ? (
-            <button
-              type="button"
-              className="btn-secondary text-xs"
-              onClick={() => setShowUpload((v) => !v)}
-            >
-              {showUpload ? 'Hide upload' : 'Replace sheet'}
-            </button>
-          ) : undefined
-        }
-      />
+      <SectionHeader title="Persona activity report (Last 24h)" />
 
       <div className="panel p-4 space-y-3">
-        {uploadsEnabled && (!sheetLoaded || showUpload) && (
-          <>
-            <div
-              className={cn(
-                'border border-dashed rounded-md px-4 py-6 text-center transition-colors cursor-pointer',
-                dragging ? 'border-accent bg-accent/5' : 'border-border hover:border-text-secondary/60'
-              )}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragging(false);
-                if (e.dataTransfer.files?.length) handleFiles(e.dataTransfer.files);
-              }}
-              onClick={() => inputRef.current?.click()}
-            >
-              <input
-                ref={inputRef}
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files?.length) handleFiles(e.target.files);
-                  e.target.value = '';
-                }}
-              />
-              <Upload className="w-5 h-5 mx-auto text-text-secondary mb-2" />
-              <div className="text-sm text-text">
-                Drop persona activity report here, or click to browse
-              </div>
-              <div className="text-[11px] text-text-secondary mt-1">
-                Excel or CSV · matched to main dataset by Prospect Id / Email
-              </div>
-            </div>
-
-            {uploadStep === 'uploading' && (
-              <div className="flex items-center gap-2 text-sm text-text-secondary">
-                <Loader2 className="w-4 h-4 animate-spin" /> Uploading…
-              </div>
-            )}
-            {uploadStep === 'done' && uploadMessage && (
-              <div className="flex items-start gap-2 text-sm text-emerald-400">
-                <CheckCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                <span>{uploadMessage}</span>
-              </div>
-            )}
-            {(uploadStep === 'error' || uploadError) && (
-              <div className="flex items-start gap-2 text-sm text-danger">
-                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                <span>{uploadError}</span>
-              </div>
-            )}
-          </>
-        )}
-
         <div className="text-xs text-text-secondary">{matchHint}</div>
         {activity?.has_data && activity.source_filename && (
           <div className="text-[11px] text-text-secondary">
@@ -212,10 +98,7 @@ export default function PersonaPage() {
         )}
       </div>
 
-      <SectionHeader
-        title="Top Persona Summary"
-        subtitle="Know More about B.Tech metrics · Other Persona = non-blank personas excluding Know More about B.Tech"
-      />
+      <SectionHeader title="Top Persona Summary" />
 
       <div className="panel grid grid-cols-2 md:grid-cols-5 gap-px bg-border">
         {SUMMARY_METRICS.map(({ key, label, accent }) => (
@@ -260,22 +143,7 @@ export default function PersonaPage() {
         ))}
       </div>
 
-      <SectionHeader
-        title="Know More about B.Tech — Visual Breakdown"
-        subtitle="Overall mix · Last 24h: Created vs Interested"
-        action={
-          <span
-            className="text-[11px] text-text-secondary underline decoration-dotted cursor-help"
-            title={
-              'Persona Overall buckets (add to 100%): Offer Letter Sent → Registration → Know More Only → Other B.Tech. ' +
-              'Last 24h pie: Created = leads created in the last 24 hours (Kollege Apply included); ' +
-              'Interested = distinct leads with a Know More about B.Tech activity event in the last 24 hours.'
-            }
-          >
-            Methodology
-          </span>
-        }
-      />
+      <SectionHeader title="Know More about B.Tech — Visual Breakdown" />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <ChartPanel
@@ -322,7 +190,7 @@ export default function PersonaPage() {
         />
       </div>
 
-      <SectionHeader title="Partner Breakdown" subtitle="By partner for Know More about B.Tech" />
+      <SectionHeader title="Partner Breakdown" />
 
       {data && (
         <DataTable

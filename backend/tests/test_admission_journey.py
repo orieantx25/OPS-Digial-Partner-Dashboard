@@ -141,6 +141,20 @@ def test_classify_channel_and_clash_cutoff():
     )
     assert paid_before.is_clash is True
     assert paid_before.clash_at_block is True
+    assert paid_before.clash_at_admission is False
+
+    block_then_admission = classify_lead_clash(
+        lsq_source="Careers360",
+        original_utm_campaign="careers360-spring",
+        source_at_payment="Counsellor",
+        created_on="2026-05-01",
+        sheet_is_paid=False,
+        lms_status="Under Review",
+        lms_submitted_on="2026-07-01",
+        on_block_sheet=True,
+    )
+    assert block_then_admission.clash_at_block is True
+    assert block_then_admission.clash_at_admission is True
 
     assert BLOCK_CLASH_LEAD_CUTOFF == date(2026, 6, 6)
     assert is_counsellor_clash(

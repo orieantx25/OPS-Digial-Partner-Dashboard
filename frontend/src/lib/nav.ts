@@ -36,6 +36,11 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
 
 export const NAV_PAGES = DASHBOARD_PAGES.filter((p) => p.id !== 'upload');
 
+export function visibleNavPages(leadership: boolean) {
+  if (!leadership) return NAV_PAGES;
+  return NAV_PAGES.filter((p) => p.id !== 'persona');
+}
+
 export { NAV_GROUPS };
 
 export function pageTitleForPath(pathname: string): string {

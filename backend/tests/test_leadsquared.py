@@ -120,6 +120,44 @@ def test_page_size_clamped():
     assert DEFAULT_PAGE_SIZE == 1000
 
 
+def test_retries_mysql_500_then_succeeds(monkeypatch):
+    from app.services.leadsquared_client import LeadSquaredClient
+
+    class _Resp:
+        def __init__(self, status_code, text):
+            self.status_code = status_code
+            self.text = text
+
+        def json(self):
+            import json
+
+            return json.loads(self.text)
+
+    mysql_body = (
+        '{"Status":"Error","ExceptionType":"MySqlException",'
+        '"ExceptionMessage":"There was an error processing the request."}'
+    )
+    calls = {"n": 0}
+
+    class _FakeHttp:
+        def post(self, url, json=None):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                return _Resp(500, mysql_body)
+            return _Resp(200, '{"ProspectActivities":[]}')
+
+        def close(self):
+            return None
+
+    client = LeadSquaredClient()
+    client._client = _FakeHttp()
+    client._owns_client = False
+    monkeypatch.setattr("app.services.leadsquared_client.time.sleep", lambda *_: None)
+    payload = client._post("/ProspectActivity.svc/RetrieveRecentlyModified", {})
+    assert calls["n"] == 3
+    assert payload.get("ProspectActivities") == []
+
+
 def test_date_windows_chunking():
     windows = LeadSquaredSyncService._date_windows(
         datetime(2026, 1, 1), datetime(2026, 1, 20), 7

@@ -17,20 +17,15 @@ from app.services.ingestion_service import IngestionEngine
 from app.services.leadsquared_client import LeadSquaredClient, LeadSquaredError
 from app.services.leadsquared_mapper import (
     lead_include_csv,
-    map_activities_to_dataframe,
     map_leads_to_dataframe,
 )
 from app.services.admissions_service import AdmissionsService
-from app.services.persona_activity_service import (
-    PersonaActivityService,
-    is_know_more_about_btech_event,
-)
+from app.services.persona_activity_service import PersonaActivityService
 from app.services.refund_service import RefundService
 
 logger = get_logger(__name__)
 
 FULL_SYNC_CHUNK_DAYS = 7
-PERSONA_LOOKBACK_HOURS = 24
 DEFAULT_FULL_SYNC_YEARS = 2
 
 
@@ -360,62 +355,11 @@ class LeadSquaredSyncService:
                     "message": "No leads fetched",
                 }
 
-            emit(88, "Fetching persona activities")
-            act_from = to_date - timedelta(hours=PERSONA_LOOKBACK_HOURS)
-            activity_pages: List[pl.DataFrame] = []
-            for page in self.client.iter_recently_modified_activities(act_from, to_date):
-                df = map_activities_to_dataframe(page)
-                if df.height == 0:
-                    continue
-                if "notes" in df.columns:
-                    df = df.filter(
-                        pl.col("notes").map_elements(
-                            is_know_more_about_btech_event,
-                            return_dtype=pl.Boolean,
-                        )
-                    )
-                else:
-                    df = df.head(0)
-                if df.height > 0:
-                    activity_pages.append(df)
-
-            persona_result = {"row_count": 0, "message": "No Know More about B.Tech activities in last 24h"}
-            if activity_pages:
-                raw_acts = (
-                    pl.concat(activity_pages, how="diagonal_relaxed")
-                    if len(activity_pages) > 1
-                    else activity_pages[0]
-                )
-                persona_result = self.persona.write_dataframe(
-                    raw_acts, source_label="leadsquared_sync"
-                )
-            else:
-                # Clear any prior unfiltered sheet so Last 24h KPIs do not use stale rows.
-                persona_result = self.persona.write_dataframe(
-                    pl.DataFrame(
-                        {
-                            c: pl.Series(c, [], dtype=pl.Utf8)
-                            for c in (
-                                "prospect_id",
-                                "email",
-                                "phone",
-                                "contact_name",
-                                "activity_id",
-                                "activity_date",
-                                "activity_modified_on",
-                                "notes",
-                                "match_email",
-                                "uploaded_at",
-                                "source_filename",
-                            )
-                        }
-                    ),
-                    source_label="leadsquared_sync",
-                )
-                persona_result["message"] = (
-                    "No Know More about B.Tech activities in last 24h"
-                )
-            self.cache.invalidate_all()
+            emit(88, "Skipping persona activity fetch")
+            persona_result = {
+                "row_count": 0,
+                "message": "Persona activity sync skipped; existing snapshot kept",
+            }
 
             emit(90, "Backfilling Block Amount Paid (ProspectStage)")
             bap_backfill = self.backfill_block_amount_paid_leads(
@@ -459,8 +403,7 @@ class LeadSquaredSyncService:
                 )
             )
             message = (
-                f"LeadSquared sync complete — {leads_result.get('rows_accepted', 0)} leads, "
-                f"{persona_result.get('row_count', 0)} activities"
+                f"LeadSquared sync complete — {leads_result.get('rows_accepted', 0)} leads"
             )
             if bap_backfill.get("rows_fetched"):
                 message += (

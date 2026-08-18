@@ -421,15 +421,18 @@ def classify_lead_clash(
         or (not any(coerce_lead_created_date(v) for v in dated_events) and belongs)
     )
     rank = max(stage_rank(lsq_prospect_stage), stage_rank(lsq_lead_stage))
-    lms_verified = _blank(lms_status).lower() == "verified"
+    clash_block = belongs and counsellor_paid
+    on_lms = bool(_blank(lms_status) or lms_submitted_on or lms_paid_on)
     reached_admission = bool(
         sheet_is_paid
-        or lms_verified
+        or on_lms
         or _as_bool(lsq_admission)
         or rank >= stage_rank("Admission")
     )
-    clash_block = belongs and counsellor_paid
-    clash_admission = belongs and reached_admission and (counsellor_paid or test_after_cutoff)
+    # A block-payment clash who later takes admission is also a clash at admission.
+    clash_admission = reached_admission and (
+        clash_block or (belongs and (counsellor_paid or test_after_cutoff))
+    )
     clash_test = belongs and test_after_cutoff
     is_clash = clash_block or clash_admission or clash_test
     if not is_clash:

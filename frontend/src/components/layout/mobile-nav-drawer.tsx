@@ -7,10 +7,11 @@ import { usePathname } from 'next/navigation';
 import { LayoutGrid, Upload, X } from 'lucide-react';
 import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { cn } from '@/lib/utils';
-import { MOBILE_INSIGHT_LINKS, NAV_GROUPS, NAV_ICONS, NAV_PAGES } from '@/lib/nav';
+import { MOBILE_INSIGHT_LINKS, NAV_GROUPS, NAV_ICONS, visibleNavPages } from '@/lib/nav';
 import { useAppStore } from '@/store/app-store';
 import { useMobileNavStore } from '@/store/mobile-nav-store';
 import { useUploadStore } from '@/store/upload-store';
+import { isLeadershipMode } from '@/lib/static-mode';
 
 export function MobileNavDrawer() {
   const pathname = usePathname();
@@ -18,6 +19,7 @@ export function MobileNavDrawer() {
   const closeDrawer = useMobileNavStore((s) => s.closeDrawer);
   const user = useAppStore((s) => s.user);
   const openUpload = useUploadStore((s) => s.openUpload);
+  const pagesForNav = visibleNavPages(isLeadershipMode());
 
   useEffect(() => {
     closeDrawer();
@@ -117,7 +119,7 @@ export function MobileNavDrawer() {
           </div>
 
           {NAV_GROUPS.map((group) => {
-            const pages = NAV_PAGES.filter((p) => p.group === group);
+            const pages = pagesForNav.filter((p) => p.group === group);
             if (!pages.length) return null;
             return (
               <div key={group} className="mb-2">

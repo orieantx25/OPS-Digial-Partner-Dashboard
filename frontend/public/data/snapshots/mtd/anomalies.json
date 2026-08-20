@@ -1,1 +1,1 @@
-[{"alert_type":"anomaly_contactability","severity":"warning","title":"Careers360: contactability dip","message":"Weekly contactability 0.0% vs avg 16.0%","metric_value":0.0,"threshold":16.045668714432104,"created_at":"2026-08-19T14:45:18.546648"}]
+[{"alert_type":"anomaly_contactability","severity":"warning","title":"Careers360: contactability dip","message":"Weekly contactability 0.0% vs avg 16.0%","metric_value":0.0,"threshold":16.045668714432104,"created_at":"2026-08-20T06:45:55.425481"}]

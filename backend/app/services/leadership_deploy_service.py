@@ -6,7 +6,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.logging_config import get_logger
 
@@ -15,6 +15,10 @@ logger = get_logger(__name__)
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 REPO_ROOT = BACKEND_ROOT.parent
 SNAPSHOTS_REL = "frontend/public/data/snapshots"
+
+# Prevent dashboard Sync from hanging forever on publish/git.
+PUBLISH_TIMEOUT_SEC = 600
+GIT_TIMEOUT_SEC = 120
 
 ProgressCb = Optional[Callable[[float, str], None]]
 
@@ -27,14 +31,28 @@ def _emit(cb: ProgressCb, percent: float, phase: str) -> None:
             pass
 
 
+def _run(
+    cmd: List[str], *, timeout: int, check: bool = True
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        cmd,
+        cwd=str(REPO_ROOT),
+        check=check,
+        timeout=timeout,
+        capture_output=True,
+        text=True,
+    )
+
+
 def publish_snapshots() -> None:
     script = BACKEND_ROOT / "scripts" / "publish_snapshots.py"
     logger.info("leadership_publish_start")
-    subprocess.run(
-        [sys.executable, str(script)],
-        cwd=str(REPO_ROOT),
-        check=True,
-    )
+    try:
+        _run([sys.executable, str(script)], timeout=PUBLISH_TIMEOUT_SEC, check=True)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Publishing snapshots timed out after {PUBLISH_TIMEOUT_SEC}s"
+        ) from exc
     logger.info("leadership_publish_done")
 
 
@@ -43,32 +61,22 @@ def git_commit_and_push(message: str) -> Dict[str, Any]:
     if not snapshots_path.is_dir():
         raise RuntimeError(f"Snapshot directory missing: {snapshots_path}")
 
-    subprocess.run(
-        ["git", "add", SNAPSHOTS_REL.replace("\\", "/")],
-        cwd=str(REPO_ROOT),
-        check=True,
-    )
+    try:
+        _run(["git", "add", SNAPSHOTS_REL.replace("\\", "/")], timeout=GIT_TIMEOUT_SEC)
+        diff = _run(
+            ["git", "diff", "--cached", "--quiet"], timeout=GIT_TIMEOUT_SEC, check=False
+        )
+        if diff.returncode == 0:
+            return {
+                "pushed": False,
+                "message": "Snapshots unchanged — no git commit needed",
+            }
 
-    diff = subprocess.run(
-        ["git", "diff", "--cached", "--quiet"],
-        cwd=str(REPO_ROOT),
-    )
-    if diff.returncode == 0:
-        return {
-            "pushed": False,
-            "message": "Snapshots unchanged — no git commit needed",
-        }
+        _run(["git", "commit", "-m", message], timeout=GIT_TIMEOUT_SEC)
+        _run(["git", "push", "origin", "main"], timeout=GIT_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Git deploy timed out after {GIT_TIMEOUT_SEC}s") from exc
 
-    subprocess.run(
-        ["git", "commit", "-m", message],
-        cwd=str(REPO_ROOT),
-        check=True,
-    )
-    subprocess.run(
-        ["git", "push", "origin", "main"],
-        cwd=str(REPO_ROOT),
-        check=True,
-    )
     logger.info("leadership_git_push_done", message=message)
     return {
         "pushed": True,

@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
 from app.api.dependencies import require_authenticated_user, require_write_access
+from app.config import get_settings
 from app.domain.models import PaginatedResponse, UserInfo
 from app.logging_config import get_logger
 from app.services.admission_journey_service import AdmissionJourneyService
 from app.services.job_store import job_store
+from app.services.leadership_deploy_service import deploy_leadership_snapshots
 from app.services.pipeline_overview_service import PipelineOverviewService
 
 router = APIRouter(prefix="/admission-journey", tags=["admission-journey"])
@@ -20,6 +24,8 @@ logger = get_logger(__name__)
 
 _active_job_lock = threading.Lock()
 _active_job_id: Optional[str] = None
+# Hung sync (e.g. stuck deploy) must not block Sync forever.
+_STALE_JOB_SECONDS = 20 * 60
 
 
 def get_journey_service() -> AdmissionJourneyService:
@@ -32,6 +38,37 @@ def _current_job() -> Optional[Dict[str, Any]]:
     if not job_id:
         return None
     return job_store.get(job_id)
+
+
+def _clear_stale_active_job() -> None:
+    """Mark stalled sync jobs failed so a new Sync can start."""
+    global _active_job_id
+    with _active_job_lock:
+        job_id = _active_job_id
+        if not job_id:
+            return
+        job = job_store.get(job_id)
+        if not job:
+            _active_job_id = None
+            return
+        if job.get("status") not in {"queued", "processing"}:
+            _active_job_id = None
+            return
+        updated_at = float(job.get("updated_at") or job.get("created_at") or 0)
+        age = time.time() - updated_at
+        if age < _STALE_JOB_SECONDS:
+            return
+        job_store.update(
+            job_id,
+            status="failed",
+            phase="Timed out",
+            error=f"Sync stalled for {int(age // 60)} minutes and was cancelled",
+            message=f"Sync stalled for {int(age // 60)} minutes and was cancelled",
+        )
+        _active_job_id = None
+        logger.warning(
+            "admission_journey_sync_stale_cleared", job_id=job_id, age_sec=int(age)
+        )
 
 
 def _run_sync_job(job_id: str, service: AdmissionJourneyService) -> None:
@@ -55,7 +92,38 @@ def _run_sync_job(job_id: str, service: AdmissionJourneyService) -> None:
         )
 
     try:
+        job_store.update(job_id, status="processing", phase="Starting", percent=0.0)
         result = service.sync(progress=progress)
+        message = result.get("message") or "Completed"
+        report: Dict[str, Any] = dict(result)
+
+        job_store.update(
+            job_id,
+            status="processing",
+            phase="Journey sync complete",
+            percent=95.0,
+            rows_total=int(result.get("total") or 0),
+            rows_processed=int(result.get("synced") or 0),
+            message=message,
+            report=report,
+        )
+
+        settings = get_settings()
+        if settings.leadership_auto_deploy_on_sync:
+            def deploy_cb(percent: float, phase: str) -> None:
+                job_store.update(job_id, status="processing", percent=percent, phase=phase)
+
+            try:
+                deploy_info = deploy_leadership_snapshots(progress_cb=deploy_cb)
+                report["leadership_deploy"] = deploy_info
+                deploy_msg = deploy_info.get("message") or "Leadership deploy complete"
+                message = f"{message}; {deploy_msg}"
+            except Exception as deploy_exc:
+                logger.error(
+                    "admission_journey_deploy_failed", job_id=job_id, error=str(deploy_exc)
+                )
+                message = f"{message}; Deploy failed: {deploy_exc}"
+
         job_store.update(
             job_id,
             status="completed",
@@ -63,8 +131,8 @@ def _run_sync_job(job_id: str, service: AdmissionJourneyService) -> None:
             percent=100.0,
             rows_total=int(result.get("total") or 0),
             rows_processed=int(result.get("synced") or 0),
-            message=result.get("message") or "Completed",
-            report=result,
+            message=message,
+            report=report,
         )
     except Exception as exc:
         logger.error("admission_journey_sync_failed", job_id=job_id, error=str(exc))
@@ -86,7 +154,7 @@ def _percent(payload: Dict[str, Any]) -> float:
     synced = float(payload.get("synced") or 0)
     if total <= 0:
         return 0.0
-    return min(99.0, round(100.0 * synced / total, 1))
+    return min(95.0, round(100.0 * synced / total, 1))
 
 
 @router.get("/status")
@@ -94,6 +162,7 @@ async def journey_status(
     service: AdmissionJourneyService = Depends(get_journey_service),
     user: UserInfo = Depends(require_authenticated_user),
 ):
+    _clear_stale_active_job()
     payload = service.get_status()
     payload["sync_job"] = _current_job()
     return payload
@@ -111,6 +180,8 @@ async def start_journey_sync(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="All Payments sheet is not loaded. Run Google/admissions sync first.",
         )
+
+    _clear_stale_active_job()
 
     with _active_job_lock:
         if _active_job_id and (job_store.get(_active_job_id) or {}).get("status") in {
@@ -150,6 +221,7 @@ async def list_students(
     clash: Optional[str] = Query(default=None),
     paid: Optional[str] = Query(default=None),
     channel: Optional[str] = Query(default="all"),
+    block_status: Optional[str] = Query(default=None),
     search: Optional[str] = Query(default=None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
@@ -162,10 +234,40 @@ async def list_students(
             clash=clash,
             paid=paid,
             channel=channel,
+            block_status=block_status,
             search=search,
             page=page,
             page_size=page_size,
         )
+    )
+
+
+@router.get("/export")
+async def export_students(
+    campus: Optional[str] = Query(default=None),
+    clash: Optional[str] = Query(default=None),
+    paid: Optional[str] = Query(default=None),
+    channel: Optional[str] = Query(default="all"),
+    block_status: Optional[str] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    service: AdmissionJourneyService = Depends(get_journey_service),
+    user: UserInfo = Depends(require_authenticated_user),
+):
+    try:
+        csv_text = service.export_students_csv(
+            campus=campus,
+            clash=clash,
+            paid=paid,
+            channel=channel,
+            block_status=block_status,
+            search=search,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return StreamingResponse(
+        iter([csv_text]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=admission_journey.csv"},
     )
 
 
@@ -179,7 +281,6 @@ async def student_detail(
     if not detail:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
     return detail
-
 
 _pipeline_job_lock = threading.Lock()
 _pipeline_job_id: Optional[str] = None

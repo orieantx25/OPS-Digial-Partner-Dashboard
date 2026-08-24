@@ -526,6 +526,7 @@ export interface DpAdmissionRow {
   email?: string | null;
   phone?: string | null;
   lead_name?: string | null;
+  student_name?: string | null;
   partner?: string | null;
   campus_code?: string | null;
   semester?: string | null;
@@ -534,6 +535,18 @@ export interface DpAdmissionRow {
   status?: string | null;
   order_id?: string | null;
   payment_id?: string | null;
+  lead_created_on?: string | null;
+  lead_source?: string | null;
+  campaign?: string | null;
+  source_at_payment?: string | null;
+  campaign_at_payment?: string | null;
+  original_utm_medium?: string | null;
+  original_utm_campaign?: string | null;
+  contact_source_sheet?: string | null;
+  lms_status?: string | null;
+  clash_at_admission?: boolean;
+  clash_at_block?: boolean;
+  journey_id?: string | null;
 }
 
 export interface DpAdmissionsSummary {
@@ -541,10 +554,44 @@ export interface DpAdmissionsSummary {
   total_paid: number;
   verified_sem1?: number;
   dp_matched: number;
+  clash_at_admission?: number;
   by_partner: { partner: string; count: number }[];
   partner_chart?: ChartData;
   fee_status?: AdmissionsFeeStatus;
   rows: DpAdmissionRow[];
+  rows_total?: number;
+  rows_truncated?: boolean;
+}
+
+export interface AdmissionReconcileCheck {
+  id: string;
+  label: string;
+  ok: boolean;
+  detail?: string;
+}
+
+export interface AdmissionReconcileDefinition {
+  key: string;
+  label: string;
+  definition: string;
+  value: number;
+}
+
+export interface AdmissionReconcile {
+  definitions: AdmissionReconcileDefinition[];
+  checks: AdmissionReconcileCheck[];
+  ok: boolean;
+  sheet_paid: number;
+  verified_sem1: number;
+  dp_matched: number;
+  journey_has_data: boolean;
+  journey_total: number;
+  journey_paid: number;
+  journey_last_synced_at?: string | null;
+  master_admissions: number;
+  has_sheet: boolean;
+  has_lms: boolean;
+  has_master: boolean;
 }
 
 export interface CampusAdmissionRow {
@@ -603,6 +650,8 @@ export interface AdmissionJourneyStatus {
   dp_count?: number;
   counsellor_count?: number;
   other_count?: number;
+  block_full_count?: number;
+  block_partial_count?: number;
   campuses: string[];
   last_synced_at: string | null;
   admissions_loaded: boolean;
@@ -650,6 +699,8 @@ export interface AdmissionJourneyRow {
   clash_at_block?: boolean;
   clash_at_admission?: boolean;
   lsq_matched: boolean;
+  block_amount_paid_sheet?: string | null;
+  block_payment_status?: string | null;
   block_payment_done?: boolean;
   sem_fee_under_review?: boolean;
   sem_fee_verified?: boolean;
@@ -719,6 +770,7 @@ export interface AdmissionJourneyDetail {
     campaign_at_payment?: string | null;
     amount_inr?: string | null;
     block_amount?: string | null;
+    block_payment_status?: string | null;
     lms_verified_paid_inr?: string | null;
     lms_payable_inr?: string | null;
     paid_at?: string | null;
@@ -726,6 +778,9 @@ export interface AdmissionJourneyDetail {
     lms_verified_on?: string | null;
     lms_paid_on?: string | null;
     lms_submitted_on?: string | null;
+    sem_utr?: string | null;
+    block_utr?: string | null;
+    lms_utr?: string | null;
     sheet_created_at?: string | null;
     sheet_updated_at?: string | null;
     block_payment_done?: boolean;

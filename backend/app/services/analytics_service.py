@@ -40,6 +40,8 @@ logger = get_logger(__name__)
 
 # Dial counts above this are treated as corrupt (e.g. Excel date serials like 1899).
 MAX_DIAL_COUNT = 100
+# Table rows returned for DP admissions UI; KPIs use full SQL aggregates.
+DP_ADMISSIONS_DISPLAY_LIMIT = 500
 SAFE_DIALS_EXPR = (
     f"CASE WHEN COALESCE(CAST(total_dialed_count AS INTEGER), 0) > {MAX_DIAL_COUNT} "
     f"THEN 0 ELSE LEAST(GREATEST(COALESCE(CAST(total_dialed_count AS INTEGER), 0), 0), "
@@ -3959,7 +3961,11 @@ class AnalyticsEngine:
                     LOWER(TRIM(COALESCE(m.email, ''))) AS match_email,
                     ANY_VALUE(COALESCE(NULLIF(TRIM(CAST(m.partner AS VARCHAR)), ''), '(blank)')) AS partner,
                     ANY_VALUE(m.name) AS lead_name,
-                    ANY_VALUE(m.phone) AS phone
+                    ANY_VALUE(m.phone) AS phone,
+                    ANY_VALUE(m.{LEAD_CREATED_DATE_COLUMN}) AS lead_created_on,
+                    ANY_VALUE(m.source) AS contact_source,
+                    ANY_VALUE(m.campaign) AS campaign,
+                    ANY_VALUE(m.source) AS lead_source
                 FROM {MASTER_DATASET_TABLE} m
                 WHERE m.partner IN ({partners})
                   AND NULLIF(TRIM(COALESCE(m.email, '')), '') IS NOT NULL
@@ -3980,7 +3986,11 @@ class AnalyticsEngine:
                     ) AS phone10,
                     ANY_VALUE(COALESCE(NULLIF(TRIM(CAST(m.partner AS VARCHAR)), ''), '(blank)')) AS partner,
                     ANY_VALUE(m.name) AS lead_name,
-                    ANY_VALUE(m.phone) AS phone
+                    ANY_VALUE(m.phone) AS phone,
+                    ANY_VALUE(m.{LEAD_CREATED_DATE_COLUMN}) AS lead_created_on,
+                    ANY_VALUE(m.source) AS contact_source,
+                    ANY_VALUE(m.campaign) AS campaign,
+                    ANY_VALUE(m.source) AS lead_source
                 FROM {MASTER_DATASET_TABLE} m
                 WHERE m.partner IN ({partners})
                   AND LENGTH(regexp_replace(COALESCE(CAST(m.phone AS VARCHAR), ''), '[^0-9]', '', 'g')) >= 10
@@ -3995,6 +4005,8 @@ class AnalyticsEngine:
                     p.sheet_id,
                     p.email,
                     p.sheet_phone,
+                    p.match_email,
+                    p.phone10,
                     p.student_name,
                     p.campus_code,
                     p.semester,
@@ -4006,6 +4018,10 @@ class AnalyticsEngine:
                     e.partner,
                     e.lead_name,
                     COALESCE(e.phone, p.sheet_phone) AS phone,
+                    e.lead_created_on,
+                    e.contact_source,
+                    e.campaign,
+                    e.lead_source,
                     1 AS match_rank
                 FROM paid p
                 INNER JOIN dp_email e
@@ -4015,6 +4031,8 @@ class AnalyticsEngine:
                     p.sheet_id,
                     p.email,
                     p.sheet_phone,
+                    p.match_email,
+                    p.phone10,
                     p.student_name,
                     p.campus_code,
                     p.semester,
@@ -4026,11 +4044,184 @@ class AnalyticsEngine:
                     ph.partner,
                     ph.lead_name,
                     COALESCE(ph.phone, p.sheet_phone) AS phone,
+                    ph.lead_created_on,
+                    ph.contact_source,
+                    ph.campaign,
+                    ph.lead_source,
                     2 AS match_rank
                 FROM unmatched_phone p
                 INNER JOIN dp_phone ph ON ph.phone10 = p.phone10
             )
         """
+
+    def _admissions_dp_deduped_cte(self) -> str:
+        """Paid DP-matched admissions, one row per sheet identity."""
+        base = self._admissions_dp_match_cte().rstrip()
+        return (
+            base
+            + """,
+            deduped AS (
+                SELECT * FROM matched m
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY COALESCE(m.sheet_id, m.email, m.sheet_phone)
+                    ORDER BY m.match_rank
+                ) = 1
+            )
+            """
+        )
+
+    def _sheet_paid_count(self) -> int:
+        if not self.duck_repo.admissions_exists():
+            return 0
+        rows = self.duck_repo.query_dicts(
+            f"SELECT COUNT(*) AS cnt FROM {ADMISSIONS_TABLE} WHERE is_paid"
+        )
+        return int(rows[0]["cnt"]) if rows else 0
+
+    def _dp_matched_aggregates(self) -> Dict[str, Any]:
+        """Full DP-matched counts (no display LIMIT)."""
+        if not self.duck_repo.admissions_exists() or not self._has_data():
+            return {"dp_matched": 0, "by_partner": []}
+        cte = self._admissions_dp_deduped_cte()
+        count_rows = self.duck_repo.query_dicts(
+            f"{cte} SELECT COUNT(*) AS cnt FROM deduped"
+        )
+        dp_matched = int(count_rows[0]["cnt"]) if count_rows else 0
+        partner_rows = self.duck_repo.query_dicts(
+            f"""
+            {cte}
+            SELECT
+                COALESCE(NULLIF(TRIM(CAST(partner AS VARCHAR)), ''), '(blank)') AS partner,
+                COUNT(*) AS count
+            FROM deduped
+            GROUP BY 1
+            ORDER BY count DESC, partner
+            """
+        )
+        by_partner = [
+            {"partner": str(r.get("partner") or "(blank)"), "count": int(r.get("count") or 0)}
+            for r in partner_rows
+        ]
+        return {"dp_matched": dp_matched, "by_partner": by_partner}
+
+    def get_admission_reconcile(self) -> Dict[str, Any]:
+        """Side-by-side canonical admission metrics used across dashboards."""
+        fee_status = self._lms_fee_status_summary()
+        sheet_paid = self._sheet_paid_count()
+        verified_sem1 = int(fee_status.get("verified") or 0)
+        dp_agg = self._dp_matched_aggregates()
+        dp_matched = int(dp_agg.get("dp_matched") or 0)
+
+        journey_total = 0
+        journey_paid = 0
+        journey_has_data = False
+        journey_last_synced = None
+        try:
+            from app.services.admission_journey_service import AdmissionJourneyService
+
+            journey = AdmissionJourneyService().get_status()
+            journey_has_data = bool(journey.get("has_data"))
+            journey_total = int(journey.get("row_count") or 0)
+            journey_paid = int(journey.get("paid_count") or 0)
+            journey_last_synced = journey.get("last_synced_at")
+        except Exception:
+            pass
+
+        master_admissions = 0
+        if self._has_data():
+            try:
+                master_rows = self.duck_repo.query_dicts(
+                    f"""
+                    SELECT COUNT(*) AS cnt
+                    FROM {MASTER_DATASET_TABLE}
+                    WHERE admission
+                    """
+                )
+                master_admissions = int(master_rows[0]["cnt"]) if master_rows else 0
+            except Exception:
+                master_admissions = 0
+
+        definitions = [
+            {
+                "key": "sheet_paid",
+                "label": "Sheet paid (All Payments)",
+                "definition": "All Payments rows where is_paid (Full/Partial Payment, Paid, etc.)",
+                "value": sheet_paid,
+            },
+            {
+                "key": "verified_sem1",
+                "label": "Sem1 verified (LMS)",
+                "definition": "LMS fee sheet Sem1 rows with status Verified",
+                "value": verified_sem1,
+            },
+            {
+                "key": "dp_matched",
+                "label": "DP matched paid",
+                "definition": "Sheet paid ∩ match to digital-partner LSQ lead (email then phone)",
+                "value": dp_matched,
+            },
+            {
+                "key": "journey_total",
+                "label": "Journey students",
+                "definition": "All Payments rows in Admission Journey store after sync (paid + unpaid)",
+                "value": journey_total,
+            },
+            {
+                "key": "journey_paid",
+                "label": "Journey sem fee paid",
+                "definition": "Journey rows with sheet_is_paid (should match Sheet paid after sync)",
+                "value": journey_paid,
+            },
+            {
+                "key": "master_admissions",
+                "label": "Funnel admissions (MASTER)",
+                "definition": "MASTER leads with admission=true (unfiltered; executive KPIs also apply date/partner filters)",
+                "value": master_admissions,
+            },
+        ]
+
+        checks = [
+            {
+                "id": "dp_lte_sheet_paid",
+                "label": "DP matched ≤ Sheet paid",
+                "ok": dp_matched <= sheet_paid,
+                "detail": f"{dp_matched} ≤ {sheet_paid}",
+            },
+            {
+                "id": "journey_paid_matches_sheet",
+                "label": "Journey paid = Sheet paid",
+                "ok": (not journey_has_data) or journey_paid == sheet_paid,
+                "detail": (
+                    "Journey not synced yet"
+                    if not journey_has_data
+                    else f"journey_paid={journey_paid}, sheet_paid={sheet_paid}"
+                    + ("" if journey_paid == sheet_paid else " — re-run Admission Journey sync")
+                ),
+            },
+            {
+                "id": "journey_total_gte_paid",
+                "label": "Journey students ≥ Journey paid",
+                "ok": (not journey_has_data) or journey_total >= journey_paid,
+                "detail": f"total={journey_total}, paid={journey_paid}",
+            },
+        ]
+
+        return {
+            "definitions": definitions,
+            "checks": checks,
+            "ok": all(bool(c.get("ok")) for c in checks),
+            "sheet_paid": sheet_paid,
+            "verified_sem1": verified_sem1,
+            "dp_matched": dp_matched,
+            "journey_has_data": journey_has_data,
+            "journey_total": journey_total,
+            "journey_paid": journey_paid,
+            "journey_last_synced_at": journey_last_synced,
+            "master_admissions": master_admissions,
+            "has_sheet": self.duck_repo.admissions_exists(),
+            "has_lms": bool(fee_status.get("has_lms")),
+            "has_master": self._has_data(),
+        }
 
     def _admissions_block_join_sql(self, alias: str = "a") -> str:
         """Left-join block payment attributes (state/gender) on email or phone."""
@@ -4193,76 +4384,167 @@ class AnalyticsEngine:
         if not self.duck_repo.admissions_exists():
             return empty
 
-        total_paid_rows = self.duck_repo.query_dicts(
-            f"SELECT COUNT(*) AS cnt FROM {ADMISSIONS_TABLE} WHERE is_paid"
-        )
-        total_paid = int(total_paid_rows[0]["cnt"]) if total_paid_rows else 0
+        total_paid = self._sheet_paid_count()
         fee_status = self._lms_fee_status_summary()
         if not self._has_data():
             result = {
                 **empty,
                 "has_sheet": True,
                 "total_paid": total_paid,
-                "fee_status": fee_status,
                 "verified_sem1": fee_status.get("verified", 0),
+                "fee_status": fee_status,
+                "rows_total": 0,
+                "rows_truncated": False,
             }
             self.cache.set("dp_admissions", cache_key, result)
             return result
 
-        match_cte = self._admissions_dp_match_cte()
+        display_limit = DP_ADMISSIONS_DISPLAY_LIMIT
+        dedupe_cte = self._admissions_dp_deduped_cte()
+        aggregates = self._dp_matched_aggregates()
+        dp_matched = int(aggregates.get("dp_matched") or 0)
+        by_partner = list(aggregates.get("by_partner") or [])
+
+        block_select = """
+            NULL AS source_at_payment,
+            NULL AS campaign_at_payment,
+            NULL AS original_utm_campaign,
+            NULL AS original_utm_medium,
+            NULL AS contact_source_sheet
+        """
+        block_join = ""
+        if self.duck_repo.block_payment_exists():
+            block_select = """
+                b.source_at_payment,
+                b.campaign_at_payment,
+                b.original_utm_campaign,
+                b.original_utm_medium,
+                b.contact_source_sheet
+            """
+            block_join = f"""
+            LEFT JOIN (
+                SELECT
+                    match_email,
+                    match_phone,
+                    ANY_VALUE(source_at_payment) AS source_at_payment,
+                    ANY_VALUE(campaign_at_payment) AS campaign_at_payment,
+                    ANY_VALUE(original_utm_campaign) AS original_utm_campaign,
+                    ANY_VALUE(original_utm_medium) AS original_utm_medium,
+                    ANY_VALUE(contact_source_sheet) AS contact_source_sheet
+                FROM {BLOCK_PAYMENT_TABLE}
+                WHERE match_email IS NOT NULL OR match_phone IS NOT NULL
+                GROUP BY match_email, match_phone
+            ) b ON (
+                (m.match_email IS NOT NULL AND b.match_email IS NOT NULL
+                 AND m.match_email = b.match_email)
+                OR (m.phone10 IS NOT NULL AND b.match_phone IS NOT NULL
+                    AND m.phone10 = b.match_phone)
+            )
+            """
+        lms_select = "NULL AS lms_status"
+        lms_join = ""
+        if self.duck_repo.admissions_lms_exists():
+            lms_select = "lms.status AS lms_status"
+            lms_join = f"""
+            LEFT JOIN (
+                SELECT match_email, ANY_VALUE(status) AS status
+                FROM {ADMISSIONS_LMS_TABLE}
+                WHERE match_email IS NOT NULL
+                GROUP BY match_email
+            ) lms ON m.match_email IS NOT NULL AND lms.match_email = m.match_email
+            """
+
+        # Full set for accurate clash KPI; table shows first N rows.
         rows = self.duck_repo.query_dicts(
             f"""
-            {match_cte}
+            {dedupe_cte}
             SELECT
-                sheet_id,
-                email,
-                sheet_phone,
-                student_name,
-                campus_code,
-                semester,
-                amount_inr,
-                paid_at,
-                status,
-                order_id,
-                payment_id,
-                partner,
-                phone,
-                lead_name
-            FROM matched
-            QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY COALESCE(sheet_id, email, sheet_phone)
-                ORDER BY match_rank
-            ) = 1
-            ORDER BY paid_at DESC NULLS LAST, email
-            LIMIT 500
+                m.sheet_id,
+                m.email,
+                m.sheet_phone,
+                m.student_name,
+                m.campus_code,
+                m.semester,
+                m.amount_inr,
+                m.paid_at,
+                m.status,
+                m.order_id,
+                m.payment_id,
+                m.partner,
+                m.phone,
+                m.lead_name,
+                m.lead_created_on,
+                m.contact_source,
+                m.campaign,
+                m.lead_source,
+                {block_select},
+                {lms_select}
+            FROM deduped m
+            {block_join}
+            {lms_join}
+            ORDER BY m.paid_at DESC NULLS LAST, m.email
             """
         )
+        from app.services.admission_journey_service import classify_lead_clash, make_journey_id
+
         out_rows: List[Dict[str, Any]] = []
-        partner_counts: Dict[str, int] = {}
-        for r in rows:
+        clash_at_admission = 0
+        for idx, r in enumerate(rows):
             partner = str(r.get("partner") or "(blank)")
-            partner_counts[partner] = partner_counts.get(partner, 0) + 1
-            out_rows.append(
-                {
-                    "sheet_id": r.get("sheet_id"),
-                    "email": r.get("email"),
-                    "phone": r.get("phone") or r.get("sheet_phone"),
-                    "lead_name": r.get("lead_name") or r.get("student_name"),
-                    "partner": partner,
-                    "campus_code": r.get("campus_code"),
-                    "semester": r.get("semester"),
-                    "amount_inr": r.get("amount_inr"),
-                    "paid_at": r.get("paid_at"),
-                    "status": r.get("status"),
-                    "order_id": r.get("order_id"),
-                    "payment_id": r.get("payment_id"),
-                }
+            verdict = classify_lead_clash(
+                lsq_source=r.get("lead_source") or r.get("contact_source") or partner,
+                contact_source_sheet=r.get("contact_source_sheet"),
+                original_utm_medium=r.get("original_utm_medium"),
+                original_utm_campaign=r.get("original_utm_campaign"),
+                lsq_campaign=r.get("campaign"),
+                source_at_payment=r.get("source_at_payment"),
+                campaign_at_payment=r.get("campaign_at_payment"),
+                created_on=r.get("lead_created_on"),
+                paid_at=r.get("paid_at"),
+                lms_status=r.get("lms_status"),
+                sheet_is_paid=True,
+                on_block_sheet=bool(
+                    r.get("source_at_payment")
+                    or r.get("campaign_at_payment")
+                    or r.get("original_utm_campaign")
+                ),
             )
-        by_partner = [
-            {"partner": name, "count": count}
-            for name, count in sorted(partner_counts.items(), key=lambda x: (-x[1], x[0]))
-        ]
-        dp_matched = sum(p["count"] for p in by_partner)
+            if verdict.clash_at_admission:
+                clash_at_admission += 1
+            if idx < display_limit:
+                out_rows.append(
+                    {
+                        "sheet_id": r.get("sheet_id"),
+                        "email": r.get("email"),
+                        "phone": r.get("phone") or r.get("sheet_phone"),
+                        "lead_name": r.get("lead_name") or r.get("student_name"),
+                        "student_name": r.get("student_name"),
+                        "partner": partner,
+                        "campus_code": r.get("campus_code"),
+                        "semester": r.get("semester"),
+                        "amount_inr": r.get("amount_inr"),
+                        "paid_at": r.get("paid_at"),
+                        "status": r.get("status"),
+                        "order_id": r.get("order_id"),
+                        "payment_id": r.get("payment_id"),
+                        "lead_created_on": r.get("lead_created_on"),
+                        "lead_source": r.get("lead_source") or r.get("contact_source"),
+                        "campaign": r.get("campaign"),
+                        "source_at_payment": r.get("source_at_payment"),
+                        "campaign_at_payment": r.get("campaign_at_payment"),
+                        "original_utm_medium": r.get("original_utm_medium"),
+                        "original_utm_campaign": r.get("original_utm_campaign"),
+                        "contact_source_sheet": r.get("contact_source_sheet"),
+                        "lms_status": r.get("lms_status"),
+                        "clash_at_admission": verdict.clash_at_admission,
+                        "clash_at_block": verdict.clash_at_block,
+                        "journey_id": make_journey_id(
+                            r.get("sheet_id"),
+                            r.get("email"),
+                            r.get("phone") or r.get("sheet_phone"),
+                        ),
+                    }
+                )
 
         partner_chart = ChartData(
             chart_id="dp_admissions_by_partner",
@@ -4282,10 +4564,13 @@ class AnalyticsEngine:
             "total_paid": total_paid,
             "verified_sem1": fee_status.get("verified", 0),
             "dp_matched": dp_matched,
+            "clash_at_admission": clash_at_admission,
             "by_partner": by_partner,
             "partner_chart": partner_chart,
             "fee_status": fee_status,
             "rows": out_rows,
+            "rows_total": dp_matched,
+            "rows_truncated": dp_matched > display_limit,
         }
         self.cache.set("dp_admissions", cache_key, result)
         return result

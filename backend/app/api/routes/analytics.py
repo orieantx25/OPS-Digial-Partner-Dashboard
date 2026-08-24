@@ -235,6 +235,14 @@ async def admissions_campus(
     return engine.get_campus_admissions(filters)
 
 
+@router.get("/admissions/reconcile")
+async def admissions_reconcile(
+    engine: AnalyticsEngine = Depends(get_analytics_engine),
+):
+    """Canonical admission metrics side-by-side for cross-dashboard verification."""
+    return engine.get_admission_reconcile()
+
+
 @router.get("/anomalies")
 async def anomalies(
     filters: FilterParams = Depends(parse_filters),

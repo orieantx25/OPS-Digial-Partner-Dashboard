@@ -291,3 +291,130 @@ def test_recompute_admission_from_sheets_marks_dp_lead(tmp_path):
         "SELECT COUNT(*) AS c FROM master_dataset WHERE admission AND email = 'admit@example.com'"
     )
     assert int(flagged[0]["c"]) >= 1
+
+
+def test_dp_admissions_flags_clash_at_admission(tmp_path):
+    from app.config import Settings
+    from app.domain.models import FilterParams
+    from app.domain.schema import ALL_COLUMNS, BOOLEAN_COLUMNS, MASTER_PARQUET_FILE
+    from app.infrastructure.duckdb_repo import AnalyticsCache, DuckDBRepository
+    from app.services.analytics_service import AnalyticsEngine
+    from app.services.block_payment_service import BlockPaymentService
+
+    settings = Settings(
+        data_dir=str(tmp_path),
+        parquet_dir=str(tmp_path / "parquet"),
+        duckdb_path=str(tmp_path / "analytics.duckdb"),
+        metadata_db_url=f"sqlite:///{tmp_path / 'metadata.db'}",
+    )
+    parquet_dir = tmp_path / "parquet"
+    parquet_dir.mkdir(parents=True)
+
+    master_row = {c: None for c in ALL_COLUMNS}
+    for c in BOOLEAN_COLUMNS:
+        master_row[c] = False
+    master_row.update(
+        {
+            "prospect_id": "p-clash",
+            "email": "clash@example.com",
+            "phone": "919876543210",
+            "partner": "Careers360",
+            "name": "Clash Student",
+            "source": "Careers360",
+            "campaign": "careers360-spring",
+            "date": "2026-05-01",
+            "funnel_stage": "Admission",
+            "admission": True,
+        }
+    )
+    pl.DataFrame([master_row]).select(ALL_COLUMNS).write_parquet(
+        parquet_dir / MASTER_PARQUET_FILE
+    )
+
+    BlockPaymentService(settings=settings).upload_sheet(
+        "block.csv",
+        b"Email,Phone,Source at Payment,Campaign at Payment,Original UTM: UTM Campaign\n"
+        b"clash@example.com,9876543210,Counsellor,walk-in,careers360-spring\n",
+    )
+    AdmissionsService(settings=settings).upload_sheet(
+        "admissions.csv",
+        b"Student Email,Student Phone,University,Semester I Amount Payment Status\n"
+        b"clash@example.com,9876543210,ADYPU,Full Payment\n",
+    )
+
+    duck = DuckDBRepository(settings)
+    engine = AnalyticsEngine(duck_repo=duck, cache=AnalyticsCache(ttl_seconds=0))
+    dp = engine.get_dp_admissions(FilterParams())
+
+    assert dp["dp_matched"] >= 1
+    assert dp["clash_at_admission"] >= 1
+    clash_rows = [r for r in dp["rows"] if r.get("clash_at_admission")]
+    assert clash_rows
+    assert clash_rows[0]["email"] == "clash@example.com"
+
+
+def test_dp_admissions_kpi_uses_full_count_when_rows_truncated(tmp_path, monkeypatch):
+    """KPI dp_matched must equal all matches even when the table is capped."""
+    import app.services.analytics_service as analytics_mod
+    from app.config import Settings
+    from app.domain.models import FilterParams
+    from app.domain.schema import ALL_COLUMNS, BOOLEAN_COLUMNS, MASTER_PARQUET_FILE
+    from app.infrastructure.duckdb_repo import AnalyticsCache, DuckDBRepository
+    from app.services.analytics_service import AnalyticsEngine
+
+    monkeypatch.setattr(analytics_mod, "DP_ADMISSIONS_DISPLAY_LIMIT", 2)
+
+    settings = Settings(
+        data_dir=str(tmp_path),
+        parquet_dir=str(tmp_path / "parquet"),
+        duckdb_path=str(tmp_path / "analytics.duckdb"),
+        metadata_db_url=f"sqlite:///{tmp_path / 'metadata.db'}",
+    )
+    parquet_dir = tmp_path / "parquet"
+    parquet_dir.mkdir(parents=True)
+
+    master_rows = []
+    csv_lines = [b"Student Email,Student Phone,University,Semester I Amount Payment Status"]
+    for i in range(3):
+        row = {c: None for c in ALL_COLUMNS}
+        for c in BOOLEAN_COLUMNS:
+            row[c] = False
+        email = f"admit{i}@example.com"
+        row.update(
+            {
+                "prospect_id": f"p{i}",
+                "email": email,
+                "phone": f"91987654321{i}",
+                "partner": "College Dunia",
+                "name": f"Admit {i}",
+                "funnel_stage": "Offer Letter",
+                "offer_letter": True,
+                "admission": False,
+            }
+        )
+        master_rows.append(row)
+        csv_lines.append(f"{email},987654321{i},ADYPU,Full Payment".encode())
+
+    pl.DataFrame(master_rows).select(ALL_COLUMNS).write_parquet(
+        parquet_dir / MASTER_PARQUET_FILE
+    )
+    AdmissionsService(settings=settings).upload_sheet(
+        "admissions.csv",
+        b"\n".join(csv_lines) + b"\n",
+    )
+
+    duck = DuckDBRepository(settings)
+    engine = AnalyticsEngine(duck_repo=duck, cache=AnalyticsCache(ttl_seconds=0))
+    dp = engine.get_dp_admissions(FilterParams())
+
+    assert dp["dp_matched"] == 3
+    assert dp["total_paid"] == 3
+    assert dp["rows_total"] == 3
+    assert dp["rows_truncated"] is True
+    assert len(dp["rows"]) == 2
+
+    reconcile = engine.get_admission_reconcile()
+    assert reconcile["sheet_paid"] == 3
+    assert reconcile["dp_matched"] == 3
+    assert reconcile["has_sheet"] is True
+    assert any(c["id"] == "dp_lte_sheet_paid" and c["ok"] for c in reconcile["checks"])

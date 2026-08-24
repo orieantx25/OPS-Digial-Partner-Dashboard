@@ -17,6 +17,7 @@ from app.services.admission_journey_service import (
     is_counsellor_clash,
     make_journey_id,
     parse_event_datetime,
+    resolve_block_payment_status,
 )
 from app.services.admissions_service import AdmissionsService
 from app.services.analytics_service import BLOCK_CLASH_LEAD_CUTOFF
@@ -89,6 +90,16 @@ def _seed_sheets(settings):
     return adm_svc
 
 
+def test_resolve_block_payment_status_prefers_sheet_then_50k_rule():
+    assert resolve_block_payment_status("Full Payment", "5000") == "Full Payment"
+    assert resolve_block_payment_status("Partial Payment", "50000") == "Partial Payment"
+    assert resolve_block_payment_status(None, "50000") == "Full Payment"
+    assert resolve_block_payment_status("", "5000") == "Partial Payment"
+    assert resolve_block_payment_status("Paid", "5000") == "Partial Payment"
+    assert resolve_block_payment_status("Paid", "50,000") == "Full Payment"
+    assert resolve_block_payment_status(None, None) is None
+
+
 def test_classify_channel_and_clash_cutoff():
     assert classify_channel(False, "Careers360", "Counsellor") == CHANNEL_UNMATCHED
     assert classify_channel(True, "Careers360", "Counsellor") == CHANNEL_COUNSELLOR
@@ -106,7 +117,8 @@ def test_classify_channel_and_clash_cutoff():
         )
         == CHANNEL_DIGITAL_PARTNER
     )
-    assert is_counsellor_clash(
+    # source_at_payment="Website" → not a clash even if campaign says Counsellor
+    assert not is_counsellor_clash(
         "Website",
         "Website",
         "cpc",
@@ -115,6 +127,25 @@ def test_classify_channel_and_clash_cutoff():
         campaign_at_payment="Counsellor walk-in",
         on_block_sheet=True,
     )
+    # source_at_payment="Counsellor" → clash
+    assert is_counsellor_clash(
+        "Counsellor",
+        "Careers360",
+        "cpc",
+        "careers360-spring",
+        "2026-05-01",
+        on_block_sheet=True,
+    )
+    # source_at_payment="Sales" is captured but not a clash
+    assert not is_counsellor_clash(
+        "Sales team",
+        "Careers360",
+        "cpc",
+        "careers360-spring",
+        "2026-05-01",
+        on_block_sheet=True,
+    )
+    # source_at_payment="Website" is NOT a clash source
     ugnet = classify_lead_clash(
         lsq_source="Careers360",
         original_utm_campaign="careers360-spring",
@@ -128,9 +159,9 @@ def test_classify_channel_and_clash_cutoff():
         sheet_is_paid=True,
         on_block_sheet=True,
     )
-    assert ugnet.is_clash is True
-    assert ugnet.clash_at_block is False
-    assert ugnet.clash_at_admission is True
+    assert ugnet.is_clash is False
+
+    # source_at_payment="Counsellor" IS a clash source
     paid_before = classify_lead_clash(
         lsq_source="Website",
         original_utm_campaign="collegehai-summer",
@@ -143,6 +174,7 @@ def test_classify_channel_and_clash_cutoff():
     assert paid_before.clash_at_block is True
     assert paid_before.clash_at_admission is False
 
+    # source_at_payment="Counsellor" + reached admission via LMS
     block_then_admission = classify_lead_clash(
         lsq_source="Careers360",
         original_utm_campaign="careers360-spring",
@@ -156,16 +188,53 @@ def test_classify_channel_and_clash_cutoff():
     assert block_then_admission.clash_at_block is True
     assert block_then_admission.clash_at_admission is True
 
+    # source_at_payment="Sales" is captured but is NOT a clash
+    sales_clash = classify_lead_clash(
+        lsq_source="Careers360",
+        original_utm_campaign="careers360-spring",
+        source_at_payment="Sales",
+        created_on="2026-05-01",
+        sheet_is_paid=True,
+        on_block_sheet=True,
+    )
+    assert sales_clash.is_clash is False
+    assert sales_clash.clash_at_admission is False
+
+    # source_at_payment="Influencer" IS a clash source
+    influencer_clash = classify_lead_clash(
+        lsq_source="College Dunia",
+        original_utm_campaign="collegedunia-summer",
+        source_at_payment="Influencer referral",
+        created_on="2026-05-01",
+        sheet_is_paid=True,
+        on_block_sheet=True,
+    )
+    assert influencer_clash.is_clash is True
+
+    # source_at_payment="google" is NOT a clash source (organic)
+    organic = classify_lead_clash(
+        lsq_source="Careers360",
+        original_utm_campaign="careers360-spring",
+        source_at_payment="google",
+        created_on="2026-05-01",
+        sheet_is_paid=True,
+        on_block_sheet=True,
+    )
+    assert organic.is_clash is False
+
     assert BLOCK_CLASH_LEAD_CUTOFF == date(2026, 6, 6)
+    # Under new rules: clash is based on source_at_payment only, not date
     assert is_counsellor_clash(
         "Counsellor", "Careers360", "cpc", "careers360-spring", "2026-05-01"
     )
-    assert not is_counsellor_clash(
+    # Counsellor is still a clash even after cutoff date
+    assert is_counsellor_clash(
         "Counsellor", "Careers360", "cpc", "careers360-spring", "2026-06-06"
     )
-    assert not is_counsellor_clash(
+    assert is_counsellor_clash(
         "Counsellor", "Careers360", "cpc", "careers360-spring", "2026-07-01"
     )
+    # Website is NOT a clash source
     assert not is_counsellor_clash(
         "Website", "Careers360", "cpc", "x", "2026-05-01"
     )
@@ -251,9 +320,11 @@ def test_email_and_phone_last10_match_and_inclusion(tmp_path):
     assert "clash@example.com" in emails
 
     status = service.get_status()
+    # clash@example.com (Counsellor) + after@example.com (Counsellor) = 2 clashes
+    # ugnet@example.com has source_at_payment="Website" → not a clash under new rules
     assert status["clash_count"] == 2
-    assert status["clash_at_block"] == 1
-    assert status["clash_at_admission"] == 2
+    assert status["clash_at_block"] == 1  # only clash@ (before cutoff + on block sheet)
+    assert status["clash_at_admission"] == 2  # clash@ + after@ (both reached admission)
     assert status["dp_count"] >= 1
 
     organic = next(r for r in listed["items"] if r["email"] == "organic@example.com")
@@ -269,13 +340,13 @@ def test_email_and_phone_last10_match_and_inclusion(tmp_path):
     assert clash["original_utm_campaign"] == "careers360-spring"
 
     after = next(r for r in listed["items"] if r["email"] == "after@example.com")
-    assert after["is_clash"] is False
-    assert after["channel"] == CHANNEL_COUNSELLOR
+    # source_at_payment="Counsellor" → clash; paid on sheet → clash_at_admission
+    assert after["is_clash"] is True
+    assert after["clash_at_admission"] is True
 
     ugnet = next(r for r in listed["items"] if r["email"] == "ugnet@example.com")
-    assert ugnet["is_clash"] is True
-    assert ugnet["clash_at_block"] is False
-    assert ugnet["clash_at_admission"] is True
+    # source_at_payment="Website" → NOT a clash source
+    assert ugnet["is_clash"] is False
     assert ugnet["campaign_at_payment"]
 
     phone_row = next(r for r in listed["items"] if r["email"] == "phoneonly@example.com")
@@ -354,6 +425,45 @@ def test_email_and_phone_last10_match_and_inclusion(tmp_path):
     assert all(parse_event_datetime(item["at"]) for item in organic_detail["events"])
 
 
+def test_export_students_csv_includes_full_journey_detail(tmp_path):
+    import csv
+    from io import StringIO
+
+    settings = _settings(tmp_path)
+    adm = AdmissionsService(settings=settings)
+    adm.upload_sheet(
+        "admissions.csv",
+        b"ID,Student Name,Email,Phone,University,Semester I Amount Payment Status,"
+        b"AmountInr,Paid,PaidAt,"
+        b"Block Amount Paid,Block Amount Payment Status,"
+        b"Semester Amount UTR No / Transaction ID,Block Amount UTR No / Transaction ID,"
+        b"CreatedAt,UpdatedAt\n"
+        b"1,Export Lead,export@example.com,9111111111,ADYPU,Full Payment,10000,true,2026-05-10,"
+        b"5000,Paid,SEMUTR111,BLOCKUTR222,2026-04-01,2026-05-11\n",
+    )
+    service = AdmissionJourneyService(settings=settings, lsq_client=FakeLSQ({}))
+    service.sync()
+
+    csv_text = service.export_students_csv()
+    reader = csv.DictReader(StringIO(csv_text))
+    rows = list(reader)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["email"] == "export@example.com"
+    assert row["name"] == "Export Lead"
+    assert row["sheet_status"] == "Full Payment"
+    assert row["sem_utr"] == "SEMUTR111"
+    assert row["block_utr"] == "BLOCKUTR222"
+    assert row["block_amount"] == "5000"
+    assert row["block_payment_status"] == "Partial Payment"
+    assert "step_amounts_fields" in row
+    assert "Block payment status" in (row["step_amounts_fields"] or "")
+    assert "stage_block_reached" in row
+    assert row["stage_block_reached"] in {"True", "true", "1"}
+    assert "step_created_lsq" in reader.fieldnames
+    assert "events" in reader.fieldnames
+
+
 def test_sync_does_not_touch_master_parquet(tmp_path):
     settings = _settings(tmp_path)
     _seed_sheets(settings)
@@ -385,6 +495,7 @@ def test_router_smoke_paths():
     assert "/admission-journey/sync" in router_paths
     assert "/admission-journey/students" in router_paths
     assert "/admission-journey/students/{journey_id}" in router_paths
+    assert "/admission-journey/export" in router_paths
 
     app = create_app()
     app_paths = {getattr(route, "path", "") for route in app.routes}

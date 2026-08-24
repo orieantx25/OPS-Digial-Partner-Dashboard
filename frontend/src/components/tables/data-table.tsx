@@ -27,6 +27,7 @@ interface DataTableProps<T extends object> {
   columns: ColumnDef<T>[];
   onRowClick?: (row: T) => void;
   exportFilename?: string;
+  onExport?: () => void | Promise<void>;
   searchPlaceholder?: string;
   /** Pixel height, or `'auto'` to fit visible rows (no empty scroll area). */
   height?: number | 'auto';
@@ -59,6 +60,7 @@ export function DataTable<T extends object>({
   columns,
   onRowClick,
   exportFilename = 'export.csv',
+  onExport,
   searchPlaceholder = 'Search...',
   height = 400,
   onSearchChange,
@@ -72,6 +74,7 @@ export function DataTable<T extends object>({
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState('');
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+  const [exporting, setExporting] = useState(false);
   const parentRef = useRef<HTMLDivElement>(null);
 
   const serverSearch = typeof onSearchChange === 'function';
@@ -124,6 +127,11 @@ export function DataTable<T extends object>({
   }, [visibleColumns]);
 
   const handleExport = useCallback(() => {
+    if (onExport) {
+      setExporting(true);
+      Promise.resolve(onExport()).finally(() => setExporting(false));
+      return;
+    }
     const visibleCols = table.getVisibleFlatColumns();
     const headers = visibleCols.map((c) => c.id).join(',');
     const body = rows
@@ -132,7 +140,7 @@ export function DataTable<T extends object>({
       )
       .join('\n');
     downloadBlob(`${headers}\n${body}`, exportFilename);
-  }, [rows, table, exportFilename]);
+  }, [rows, table, exportFilename, onExport]);
 
   const emptyPx = 64;
   const contentHeight =
@@ -168,9 +176,10 @@ export function DataTable<T extends object>({
             type="button"
             className="btn-secondary flex items-center gap-1 ml-auto min-h-[40px]"
             onClick={handleExport}
+            disabled={exporting}
           >
             <Download className="w-3.5 h-3.5" />
-            Export
+            {exporting ? 'Exporting…' : 'Export'}
           </button>
         )}
       </div>

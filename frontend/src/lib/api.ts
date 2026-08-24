@@ -12,6 +12,7 @@ import {
   CampusBifurcation,
   ChartData,
   DpAdmissionsSummary,
+  AdmissionReconcile,
   FilterOptions,
   FilterParams,
   KpiMetric,
@@ -230,6 +231,7 @@ const liveApi = {
     clash?: string;
     paid?: string;
     channel?: string;
+    blockStatus?: string;
     search?: string;
     page?: number;
     pageSize?: number;
@@ -240,9 +242,29 @@ const liveApi = {
         clash: params.clash,
         paid: params.paid,
         channel: params.channel,
+        block_status: params.blockStatus,
         search: params.search,
         page: params.page ?? 1,
         page_size: params.pageSize ?? 50,
+      })}`
+    ),
+
+  exportAdmissionJourneyStudents: (params: {
+    campus?: string;
+    clash?: string;
+    paid?: string;
+    channel?: string;
+    blockStatus?: string;
+    search?: string;
+  } = {}) =>
+    request<string>(
+      `/admission-journey/export${buildQuery({
+        campus: params.campus,
+        clash: params.clash,
+        paid: params.paid,
+        channel: params.channel,
+        block_status: params.blockStatus,
+        search: params.search,
       })}`
     ),
 
@@ -283,6 +305,9 @@ const liveApi = {
     request<CampusAdmissionsSummary>(
       `/analytics/admissions/campus${buildQuery(filtersToQuery(filters))}`
     ),
+
+  getAdmissionReconcile: () =>
+    request<AdmissionReconcile>('/analytics/admissions/reconcile'),
 
   getBlockPaymentBacktracking: (filters: FilterParams) =>
     request<BlockPaymentBacktracking>(

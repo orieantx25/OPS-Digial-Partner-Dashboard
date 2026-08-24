@@ -5,7 +5,9 @@ Never writes MASTER_DATASET and never calls process_lsq_sync_batch.
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -172,6 +174,80 @@ STAGE_CHIPS: List[Tuple[str, str]] = [
     ("sem", "Sem fee / LMS"),
 ]
 
+EXPORT_CSV_COLUMNS: List[str] = [
+    "journey_id",
+    "name",
+    "email",
+    "phone",
+    "campus",
+    "campus_code",
+    "college_code",
+    "college_name",
+    "channel",
+    "lsq_matched",
+    "unmatched_lsq",
+    "clash",
+    "clash_at_block",
+    "clash_at_admission",
+    "clash_note",
+    "clash_with",
+    "sheet_paid",
+    "sheet_status",
+    "amount_inr",
+    "sem_utr",
+    "paid_at",
+    "dop",
+    "block_amount",
+    "block_payment_status",
+    "block_utr",
+    "block_payment_done",
+    "source_at_payment",
+    "campaign_at_payment",
+    "lms_status",
+    "lms_payable_inr",
+    "lms_verified_paid_inr",
+    "lms_utr",
+    "lms_submitted_on",
+    "lms_verified_on",
+    "lms_paid_on",
+    "sem_fee_under_review",
+    "sem_fee_verified",
+    "refund_case",
+    "refund_status",
+    "lsq_prospect_id",
+    "lsq_created_on",
+    "lsq_modified_on",
+    "lsq_source",
+    "lsq_medium",
+    "lsq_campaign",
+    "lsq_prospect_stage",
+    "lsq_lead_stage",
+    "lsq_stage_label",
+    "contact_source_sheet",
+    "original_utm_medium",
+    "original_utm_campaign",
+    "sheet_created_at",
+    "sheet_updated_at",
+    *[
+        col
+        for key, _ in PATH_STEPS
+        for col in (
+            f"step_{key}_lsq",
+            f"step_{key}_sheet",
+            f"step_{key}_date",
+            f"step_{key}_mismatch",
+            f"step_{key}_empty",
+            f"step_{key}_fields",
+        )
+    ],
+    *[
+        col
+        for key, _ in STAGE_CHIPS
+        for col in (f"stage_{key}_reached", f"stage_{key}_at", f"stage_{key}_detail")
+    ],
+    "events",
+]
+
 ProgressFn = Callable[[Dict[str, Any]], None]
 
 
@@ -188,6 +264,38 @@ def make_journey_id(sheet_id: Any, email: Any, phone: Any) -> str:
         ]
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
+_NON_CLASH_CAMPAIGNS = frozenset(
+    c.lower()
+    for c in (
+        "youtube",
+        "fb",
+        "google",
+        "not_set",
+        "Brand_search",
+        "Lead_search",
+        "upgrad",
+        "upgrad_home",
+        "new_leads_prospecting",
+        "sign_up",
+        "leads_prospecting",
+        "ugsot_internal",
+    )
+)
+
+
+def _is_non_clash_campaign(campaign_at_payment: Any) -> bool:
+    text = str(campaign_at_payment or "").strip().lower()
+    return text in _NON_CLASH_CAMPAIGNS
+
+
+_CLASH_SOURCE_AT_PAYMENT_TOKENS = ("counsell", "influencer")
+
+
+def _is_clash_payment_source(source_at_payment: Any) -> bool:
+    text = str(source_at_payment or "").strip().lower()
+    return any(token in text for token in _CLASH_SOURCE_AT_PAYMENT_TOKENS)
 
 
 def is_counsellor_payment_source(*values: Any) -> bool:
@@ -399,29 +507,14 @@ def classify_lead_clash(
         return ClashVerdict(False, False, False, False, None)
 
     belongs = date_before_cutoff(created_on, paid_at, dop)
-    counsellor_paid = is_counsellor_payment_source(source_at_payment, campaign_at_payment)
-    test_flag = _as_bool(lsq_test_registration) or looks_like_ugnet_or_test(
-        lsq_prospect_stage,
-        lsq_lead_stage,
-        campaign_at_payment,
-        source_at_payment,
-        utm_activity,
-        lsq_test_registration,
-    )
-    dated_events = (
-        lsq_test_registration,
-        paid_at,
-        dop,
-        lms_submitted_on,
-        lms_paid_on,
-        lsq_modified_on,
-    )
-    test_after_cutoff = test_flag and (
-        date_on_or_after_cutoff(*dated_events)
-        or (not any(coerce_lead_created_date(v) for v in dated_events) and belongs)
-    )
+
+    # Clash is determined solely by source_at_payment containing
+    # counsellor or influencer. Sales and other sources are captured, not clash.
+    clash_source = _is_clash_payment_source(source_at_payment)
+    if not clash_source:
+        return ClashVerdict(False, False, False, belongs, None)
+
     rank = max(stage_rank(lsq_prospect_stage), stage_rank(lsq_lead_stage))
-    clash_block = belongs and counsellor_paid
     on_lms = bool(_blank(lms_status) or lms_submitted_on or lms_paid_on)
     reached_admission = bool(
         sheet_is_paid
@@ -429,22 +522,16 @@ def classify_lead_clash(
         or _as_bool(lsq_admission)
         or rank >= stage_rank("Admission")
     )
-    # A block-payment clash who later takes admission is also a clash at admission.
-    clash_admission = reached_admission and (
-        clash_block or (belongs and (counsellor_paid or test_after_cutoff))
-    )
-    clash_test = belongs and test_after_cutoff
-    is_clash = clash_block or clash_admission or clash_test
-    if not is_clash:
-        return ClashVerdict(False, False, False, belongs, None)
+    clash_block = belongs and on_block_sheet
+    clash_admission = reached_admission and clash_source
     parts: List[str] = []
     if clash_block:
         parts.append("Clash at block amount")
     if clash_admission:
         parts.append("Clash at admission")
-    if clash_test and not clash_block and not clash_admission:
-        parts.append("Clash at UGNET / test registration")
-    return ClashVerdict(True, clash_block, clash_admission, belongs, " · ".join(parts) or CLASH_NOTE)
+    if not parts:
+        parts.append("Clash (payment source)")
+    return ClashVerdict(True, clash_block, clash_admission, belongs, " · ".join(parts))
 
 
 def is_counsellor_clash(
@@ -485,6 +572,87 @@ def _blank(value: Any) -> str:
 def _display(value: Any) -> Optional[str]:
     text = _blank(value)
     return text or None
+
+
+BLOCK_FULL_AMOUNT_INR = 50_000
+
+
+def _block_amount_sql(column: str = "block_amount_paid_sheet") -> str:
+    """DuckDB expression: parse sheet block amount to a number."""
+    return (
+        f"TRY_CAST(NULLIF(regexp_replace("
+        f"replace(replace(COALESCE({column}, ''), ',', ''), '₹', ''), "
+        f"'[^0-9.]', ''), '') AS DOUBLE)"
+    )
+
+
+def _block_status_filter_sql(kind: str) -> str:
+    """SQL for full/partial using sheet status first, else ₹50k rule."""
+    status = "LOWER(COALESCE(block_payment_status, ''))"
+    amount = _block_amount_sql()
+    has_full = f"({status} LIKE '%full%' AND {status} NOT LIKE '%partial%' AND {status} NOT LIKE '%partly%')"
+    has_partial = f"({status} LIKE '%partial%' OR {status} LIKE '%partly%')"
+    no_fp = f"(NOT {has_full} AND NOT {has_partial})"
+    if kind in {"full", "full_payment"}:
+        return f"({has_full} OR ({no_fp} AND {amount} >= {BLOCK_FULL_AMOUNT_INR}))"
+    if kind in {"partial", "partial_payment"}:
+        return (
+            f"({has_partial} OR ({no_fp} AND {amount} IS NOT NULL "
+            f"AND {amount} > 0 AND {amount} < {BLOCK_FULL_AMOUNT_INR}))"
+        )
+    raise ValueError(f"Unknown block status filter: {kind}")
+
+
+def _parse_amount_inr(value: Any) -> Optional[float]:
+    text = _blank(value)
+    if not text:
+        return None
+    cleaned = (
+        text.replace(",", "")
+        .replace("₹", "")
+        .replace("rs.", "")
+        .replace("rs", "")
+        .replace("inr", "")
+        .strip()
+        .lower()
+    )
+    # Keep leading digits / decimal only.
+    num = ""
+    for ch in cleaned:
+        if ch.isdigit() or ch == ".":
+            num += ch
+        elif num:
+            break
+    if not num:
+        return None
+    try:
+        return float(num)
+    except ValueError:
+        return None
+
+
+def _full_or_partial_from_text(status: Any) -> Optional[str]:
+    text = _blank(status).lower()
+    if not text:
+        return None
+    if "partial" in text or "partly" in text:
+        return "Partial Payment"
+    if "full" in text:
+        return "Full Payment"
+    return None
+
+
+def resolve_block_payment_status(status: Any = None, amount: Any = None) -> Optional[str]:
+    """Prefer sheet full/partial; else treat ₹50,000 as full block and below as partial."""
+    from_sheet = _full_or_partial_from_text(status)
+    if from_sheet:
+        return from_sheet
+    amt = _parse_amount_inr(amount)
+    if amt is not None and amt > 0:
+        if amt >= BLOCK_FULL_AMOUNT_INR:
+            return "Full Payment"
+        return "Partial Payment"
+    return _display(status)
 
 
 def _norm_compare(value: Any) -> str:
@@ -575,7 +743,17 @@ def journey_status_flags(row: Dict[str, Any], refund: Optional[Dict[str, Any]] =
     rank = _funnel_rank(row)
     block_done = bool(
         rank >= stage_rank("Block Amount Paid")
-        or _blank(row.get("block_payment_status")).lower() in {"paid", "success", "completed"}
+        or _blank(row.get("block_payment_status")).lower()
+        in {
+            "paid",
+            "success",
+            "completed",
+            "full payment",
+            "partial payment",
+            "partly paid",
+        }
+        or "full payment" in _blank(row.get("block_payment_status")).lower()
+        or "partial" in _blank(row.get("block_payment_status")).lower()
         or _blank(row.get("block_amount_paid_sheet"))
         or _blank(row.get("block_amount"))
     )
@@ -654,6 +832,8 @@ class AdmissionJourneyService:
         dp_count = int(meta.get("dp_count") or 0)
         counsellor_count = int(meta.get("counsellor_count") or 0)
         other_count = int(meta.get("other_count") or 0)
+        block_full_count = int(meta.get("block_full_count") or 0)
+        block_partial_count = int(meta.get("block_partial_count") or 0)
         campuses: List[str] = list(meta.get("campuses") or [])
 
         if has_data:
@@ -669,7 +849,9 @@ class AdmissionJourneyService:
                       SUM(CASE WHEN sheet_is_paid THEN 1 ELSE 0 END) AS paid_count,
                       SUM(CASE WHEN channel = '{CHANNEL_DIGITAL_PARTNER}' THEN 1 ELSE 0 END) AS dp_count,
                       SUM(CASE WHEN channel = '{CHANNEL_COUNSELLOR}' THEN 1 ELSE 0 END) AS counsellor_count,
-                      SUM(CASE WHEN channel = '{CHANNEL_OTHER}' THEN 1 ELSE 0 END) AS other_count
+                      SUM(CASE WHEN channel = '{CHANNEL_OTHER}' THEN 1 ELSE 0 END) AS other_count,
+                      SUM(CASE WHEN {_block_status_filter_sql('full')} THEN 1 ELSE 0 END) AS block_full_count,
+                      SUM(CASE WHEN {_block_status_filter_sql('partial')} THEN 1 ELSE 0 END) AS block_partial_count
                     FROM {ADMISSION_JOURNEY_TABLE}
                     """
                 )
@@ -683,6 +865,8 @@ class AdmissionJourneyService:
                     dp_count = int(stats[0].get("dp_count") or 0)
                     counsellor_count = int(stats[0].get("counsellor_count") or 0)
                     other_count = int(stats[0].get("other_count") or 0)
+                    block_full_count = int(stats[0].get("block_full_count") or 0)
+                    block_partial_count = int(stats[0].get("block_partial_count") or 0)
                 campus_rows = self.duck_repo.query_dicts(
                     f"""
                     SELECT DISTINCT COALESCE(NULLIF(TRIM(campus_code), ''), college_code) AS campus
@@ -707,6 +891,8 @@ class AdmissionJourneyService:
             "dp_count": dp_count,
             "counsellor_count": counsellor_count,
             "other_count": other_count,
+            "block_full_count": block_full_count,
+            "block_partial_count": block_partial_count,
             "campuses": campuses,
             "last_synced_at": meta.get("synced_at"),
             "admissions_loaded": self.duck_repo.admissions_exists(),
@@ -980,7 +1166,7 @@ class AdmissionJourneyService:
             "campus_code": _display(payment.get("campus_code")),
             "college_code": _display(block.get("college_code")),
             "college_name": _display(block.get("college_name")),
-            "sheet_status": _display(payment.get("status") or payment.get("student_status")),
+            "sheet_status": _display(payment.get("status")),
             "sheet_is_paid": sheet_is_paid,
             "amount_inr": _display(payment.get("amount_inr")),
             "paid_at": paid_at,
@@ -988,7 +1174,10 @@ class AdmissionJourneyService:
             "sheet_created_at": _display(payment.get("created_at")),
             "sheet_updated_at": _display(payment.get("updated_at")),
             "block_amount_paid_sheet": _display(payment.get("block_amount_paid_sheet")),
-            "block_payment_status": _display(payment.get("block_payment_status")),
+            "block_payment_status": resolve_block_payment_status(
+                payment.get("block_payment_status"),
+                payment.get("block_amount_paid_sheet"),
+            ),
             "contact_source_sheet": contact_source_sheet,
             "original_utm_medium": original_utm_medium,
             "original_utm_campaign": original_utm_campaign,
@@ -1004,6 +1193,9 @@ class AdmissionJourneyService:
             "lms_verified_on": _display(lms.get("verified_on")),
             "lms_paid_on": _display(lms.get("paid_on")),
             "lms_submitted_on": _display(lms.get("submitted_on")),
+            "lms_utr": _display(lms.get("utr")),
+            "sem_utr": _display(payment.get("sem_utr")),
+            "block_utr": _display(payment.get("block_utr")),
             "lsq_matched": lsq_matched,
             "lsq_prospect_id": _display(lead.get("ProspectID")),
             "lsq_source": lsq_source,
@@ -1088,26 +1280,16 @@ class AdmissionJourneyService:
         )
         return meta
 
-    def list_students(
+    def _students_where(
         self,
         *,
         campus: Optional[str] = None,
         clash: Optional[str] = None,
         paid: Optional[str] = None,
         channel: Optional[str] = None,
+        block_status: Optional[str] = None,
         search: Optional[str] = None,
-        page: int = 1,
-        page_size: int = 50,
-    ) -> Dict[str, Any]:
-        if not self.duck_repo.admission_journey_exists():
-            return {
-                "items": [],
-                "total": 0,
-                "page": page,
-                "page_size": page_size,
-                "total_pages": 0,
-            }
-
+    ) -> Tuple[str, List[Any]]:
         where = ["1=1"]
         params: List[Any] = []
         if campus:
@@ -1130,6 +1312,9 @@ class AdmissionJourneyService:
         if channel and channel != "all":
             where.append("channel = ?")
             params.append(channel)
+        block_kind = (block_status or "").strip().lower()
+        if block_kind in {"full", "full_payment", "partial", "partial_payment"}:
+            where.append(_block_status_filter_sql(block_kind))
         if search and search.strip():
             q = f"%{search.strip().lower()}%"
             where.append(
@@ -1140,8 +1325,37 @@ class AdmissionJourneyService:
                 ")"
             )
             params.extend([q, q, f"%{search.strip()}%"])
+        return " AND ".join(where), params
 
-        clause = " AND ".join(where)
+    def list_students(
+        self,
+        *,
+        campus: Optional[str] = None,
+        clash: Optional[str] = None,
+        paid: Optional[str] = None,
+        channel: Optional[str] = None,
+        block_status: Optional[str] = None,
+        search: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> Dict[str, Any]:
+        if not self.duck_repo.admission_journey_exists():
+            return {
+                "items": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": 0,
+            }
+
+        clause, params = self._students_where(
+            campus=campus,
+            clash=clash,
+            paid=paid,
+            channel=channel,
+            block_status=block_status,
+            search=search,
+        )
         total_row = self.duck_repo.query_dicts(
             f"SELECT COUNT(*) AS cnt FROM {ADMISSION_JOURNEY_TABLE} WHERE {clause}",
             params,
@@ -1203,6 +1417,10 @@ class AdmissionJourneyService:
             )
             refund = _match_side(item, refund_email, refund_phone)
             item.update(journey_status_flags(item, refund))
+            item["block_payment_status"] = resolve_block_payment_status(
+                item.get("block_payment_status"),
+                item.get("block_amount_paid_sheet"),
+            )
         total_pages = (total + page_size - 1) // page_size if page_size else 0
         return {
             "items": items,
@@ -1211,6 +1429,177 @@ class AdmissionJourneyService:
             "page_size": page_size,
             "total_pages": total_pages,
         }
+
+    EXPORT_ROW_LIMIT = 20_000
+
+    def export_students_csv(
+        self,
+        *,
+        campus: Optional[str] = None,
+        clash: Optional[str] = None,
+        paid: Optional[str] = None,
+        channel: Optional[str] = None,
+        block_status: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> str:
+        if not self.duck_repo.admission_journey_exists():
+            return self._rows_to_csv([])
+
+        clause, params = self._students_where(
+            campus=campus,
+            clash=clash,
+            paid=paid,
+            channel=channel,
+            block_status=block_status,
+            search=search,
+        )
+        total_row = self.duck_repo.query_dicts(
+            f"SELECT COUNT(*) AS cnt FROM {ADMISSION_JOURNEY_TABLE} WHERE {clause}",
+            params,
+        )
+        total = int(total_row[0]["cnt"]) if total_row else 0
+        if total > self.EXPORT_ROW_LIMIT:
+            raise ValueError(
+                f"Export limited to {self.EXPORT_ROW_LIMIT:,} students "
+                f"({total:,} match). Narrow filters and try again."
+            )
+
+        rows = self.duck_repo.query_dicts(
+            f"""
+            SELECT *
+            FROM {ADMISSION_JOURNEY_TABLE}
+            WHERE {clause}
+            ORDER BY student_name NULLS LAST, email NULLS LAST
+            """,
+            params,
+        )
+        refund_email, refund_phone = self._refund_index()
+        out_rows: List[Dict[str, Any]] = []
+        for row in rows:
+            payload = self._detail_payload(row)
+            refund = _match_side(row, refund_email, refund_phone)
+            flags = journey_status_flags(
+                {**row, "block_amount": row.get("block_amount_paid_sheet")},
+                refund,
+            )
+            payload["header"].update(flags)
+            payload["header"]["lsq_stage_label"] = format_lsq_stages(
+                row.get("lsq_lead_stage"), row.get("lsq_prospect_stage")
+            )
+            if refund:
+                payload["header"]["refund_status"] = _display(
+                    refund.get("final_status") or refund.get("status_finance")
+                )
+            out_rows.append(self._flatten_detail_for_export(payload))
+        return self._rows_to_csv(out_rows)
+
+    def _flatten_detail_for_export(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        header = payload.get("header") or {}
+        flat: Dict[str, Any] = {
+            "journey_id": header.get("journey_id"),
+            "name": header.get("name"),
+            "email": header.get("email"),
+            "phone": header.get("phone"),
+            "campus": header.get("campus"),
+            "campus_code": header.get("campus_code"),
+            "college_code": header.get("college_code"),
+            "college_name": header.get("college_name"),
+            "channel": header.get("channel"),
+            "lsq_matched": not header.get("unmatched_lsq"),
+            "unmatched_lsq": header.get("unmatched_lsq"),
+            "clash": header.get("clash"),
+            "clash_at_block": header.get("clash_at_block"),
+            "clash_at_admission": header.get("clash_at_admission"),
+            "clash_note": header.get("clash_note"),
+            "clash_with": header.get("clash_with"),
+            "sheet_paid": header.get("sheet_paid"),
+            "sheet_status": header.get("sheet_status"),
+            "amount_inr": header.get("amount_inr"),
+            "sem_utr": header.get("sem_utr"),
+            "paid_at": header.get("paid_at"),
+            "dop": header.get("dop"),
+            "block_amount": header.get("block_amount"),
+            "block_payment_status": header.get("block_payment_status"),
+            "block_utr": header.get("block_utr"),
+            "block_payment_done": header.get("block_payment_done"),
+            "source_at_payment": header.get("source_at_payment"),
+            "campaign_at_payment": header.get("campaign_at_payment"),
+            "lms_status": header.get("lms_status"),
+            "lms_payable_inr": header.get("lms_payable_inr"),
+            "lms_verified_paid_inr": header.get("lms_verified_paid_inr"),
+            "lms_utr": header.get("lms_utr"),
+            "lms_submitted_on": header.get("lms_submitted_on"),
+            "lms_verified_on": header.get("lms_verified_on"),
+            "lms_paid_on": header.get("lms_paid_on"),
+            "sem_fee_under_review": header.get("sem_fee_under_review"),
+            "sem_fee_verified": header.get("sem_fee_verified"),
+            "refund_case": header.get("refund_case"),
+            "refund_status": header.get("refund_status"),
+            "lsq_prospect_id": header.get("lsq_prospect_id"),
+            "lsq_created_on": header.get("lsq_created_on"),
+            "lsq_modified_on": header.get("lsq_modified_on"),
+            "lsq_source": header.get("lsq_source"),
+            "lsq_medium": header.get("lsq_medium"),
+            "lsq_campaign": header.get("lsq_campaign"),
+            "lsq_prospect_stage": header.get("lsq_prospect_stage"),
+            "lsq_lead_stage": header.get("lsq_lead_stage"),
+            "lsq_stage_label": header.get("lsq_stage_label"),
+            "contact_source_sheet": header.get("contact_source_sheet"),
+            "original_utm_medium": header.get("original_utm_medium"),
+            "original_utm_campaign": header.get("original_utm_campaign"),
+            "sheet_created_at": header.get("sheet_created_at"),
+            "sheet_updated_at": header.get("sheet_updated_at"),
+        }
+
+        for step in payload.get("path") or []:
+            key = step.get("key") or "step"
+            flat[f"step_{key}_lsq"] = step.get("lsq")
+            flat[f"step_{key}_sheet"] = step.get("sheet")
+            flat[f"step_{key}_date"] = step.get("date")
+            flat[f"step_{key}_mismatch"] = step.get("mismatch")
+            flat[f"step_{key}_empty"] = step.get("empty")
+            field_parts: List[str] = []
+            for field in step.get("fields") or []:
+                label = field.get("label") or ""
+                lsq_val = field.get("lsq")
+                sheet_val = field.get("sheet")
+                if lsq_val and sheet_val:
+                    field_parts.append(f"{label}: LSQ={lsq_val}; Sheet={sheet_val}")
+                elif lsq_val:
+                    field_parts.append(f"{label}: {lsq_val}")
+                elif sheet_val:
+                    field_parts.append(f"{label}: {sheet_val}")
+            flat[f"step_{key}_fields"] = " | ".join(field_parts) if field_parts else None
+
+        for chip in payload.get("stages") or []:
+            key = chip.get("key") or "stage"
+            flat[f"stage_{key}_reached"] = chip.get("reached")
+            flat[f"stage_{key}_at"] = chip.get("at")
+            flat[f"stage_{key}_detail"] = chip.get("detail")
+
+        events = payload.get("events") or []
+        flat["events"] = " | ".join(
+            f"{ev.get('label')} @ {ev.get('at')}"
+            for ev in events
+            if ev.get("label") and ev.get("at")
+        ) or None
+        return flat
+
+    @staticmethod
+    def _rows_to_csv(rows: List[Dict[str, Any]]) -> str:
+        output = io.StringIO()
+        fieldnames = list(EXPORT_CSV_COLUMNS)
+        if rows:
+            # Preserve stable order; append any unexpected keys at the end.
+            extra = [k for k in rows[0].keys() if k not in fieldnames]
+            fieldnames = fieldnames + extra
+        writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {k: "" if row.get(k) is None else row.get(k) for k in fieldnames}
+            )
+        return output.getvalue()
 
     def get_student(self, journey_id: str) -> Optional[Dict[str, Any]]:
         if not self.duck_repo.admission_journey_exists():
@@ -1308,6 +1697,10 @@ class AdmissionJourneyService:
             "campaign_at_payment": _display(row.get("campaign_at_payment")),
             "amount_inr": _display(row.get("amount_inr")),
             "block_amount": _display(row.get("block_amount_paid_sheet")),
+            "block_payment_status": resolve_block_payment_status(
+                row.get("block_payment_status"),
+                row.get("block_amount_paid_sheet"),
+            ),
             "lms_verified_paid_inr": _display(row.get("lms_verified_paid_inr")),
             "lms_payable_inr": _display(row.get("lms_payable_inr")),
             "paid_at": _display(row.get("paid_at")),
@@ -1315,6 +1708,10 @@ class AdmissionJourneyService:
             "lms_verified_on": _display(row.get("lms_verified_on")),
             "lms_paid_on": _display(row.get("lms_paid_on")),
             "lms_submitted_on": _display(row.get("lms_submitted_on")),
+            "lms_utr": _display(row.get("lms_utr")),
+            "sem_utr": _display(row.get("sem_utr")),
+            "block_utr": _display(row.get("block_utr")),
+            "sheet_status": _display(row.get("sheet_status")),
             "sheet_created_at": _display(row.get("sheet_created_at")),
             "sheet_updated_at": _display(row.get("sheet_updated_at")),
         }
@@ -1338,6 +1735,10 @@ class AdmissionJourneyService:
         )
         payment_sheet = _join_nonempty(
             row.get("source_at_payment"), row.get("campaign_at_payment")
+        )
+        block_status = resolve_block_payment_status(
+            row.get("block_payment_status"),
+            row.get("block_amount_paid_sheet"),
         )
         amounts_sheet = _join_nonempty(
             f"Semester {_blank(row.get('amount_inr'))}".strip()
@@ -1431,8 +1832,9 @@ class AdmissionJourneyService:
                         "Campaign at payment", sheet=row.get("campaign_at_payment")
                     ),
                     _compare_field(
-                        "Block payment status", sheet=row.get("block_payment_status")
+                        "Block payment status", sheet=block_status
                     ),
+                    _compare_field("Block UTR", sheet=row.get("block_utr")),
                     _compare_field("Paid at", sheet=row.get("paid_at")),
                 ],
             },
@@ -1442,15 +1844,24 @@ class AdmissionJourneyService:
                 "date": paid_at or lms_at,
                 "fields": [
                     _compare_field("Semester amount", sheet=row.get("amount_inr")),
+                    _compare_field(
+                        "Semester payment status", sheet=row.get("sheet_status")
+                    ),
                     _compare_field("Paid at", sheet=row.get("paid_at")),
                     _compare_field("DOP", sheet=row.get("dop")),
+                    _compare_field("Semester UTR", sheet=row.get("sem_utr")),
                     _compare_field(
                         "Block amount (sheet)", sheet=row.get("block_amount_paid_sheet")
                     ),
+                    _compare_field(
+                        "Block payment status", sheet=block_status
+                    ),
+                    _compare_field("Block UTR", sheet=row.get("block_utr")),
                     _compare_field("LMS payable", sheet=row.get("lms_payable_inr")),
                     _compare_field(
                         "LMS verified paid", sheet=row.get("lms_verified_paid_inr")
                     ),
+                    _compare_field("LMS UTR", sheet=row.get("lms_utr")),
                     _compare_field("LMS submitted on", sheet=row.get("lms_submitted_on")),
                     _compare_field("LMS verified on", sheet=row.get("lms_verified_on")),
                     _compare_field("LMS paid on", sheet=row.get("lms_paid_on")),
@@ -1524,7 +1935,16 @@ class AdmissionJourneyService:
         block_paid = bool(
             rank >= stage_rank("Block Amount Paid")
             or _blank(row.get("block_payment_status")).lower()
-            in {"paid", "success", "completed"}
+            in {
+                "paid",
+                "success",
+                "completed",
+                "full payment",
+                "partial payment",
+                "partly paid",
+            }
+            or "full payment" in _blank(row.get("block_payment_status")).lower()
+            or "partial" in _blank(row.get("block_payment_status")).lower()
             or _blank(row.get("block_amount_paid_sheet"))
         )
         lms_verified = (lms_status or "").strip().lower() == "verified"

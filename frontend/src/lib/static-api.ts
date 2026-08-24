@@ -6,6 +6,7 @@ import type {
   AdmissionJourneyDetail,
   AdmissionJourneyRow,
   AdmissionJourneyStatus,
+  AdmissionReconcile,
   FilterParams,
   PaginatedResponse,
   PipelineOverview,
@@ -231,6 +232,23 @@ export const staticApi = {
 
   getCampusAdmissions: (filters: FilterParams) =>
     scoped(filters, 'admissions_campus.json'),
+
+  getAdmissionReconcile: async (): Promise<AdmissionReconcile> => ({
+    definitions: [],
+    checks: [],
+    ok: true,
+    sheet_paid: 0,
+    verified_sem1: 0,
+    dp_matched: 0,
+    journey_has_data: false,
+    journey_total: 0,
+    journey_paid: 0,
+    journey_last_synced_at: null,
+    master_admissions: 0,
+    has_sheet: false,
+    has_lms: false,
+    has_master: false,
+  }),
 
   getBlockPaymentBacktracking: (filters: FilterParams) =>
     scoped(filters, 'block_payment_backtracking.json'),

@@ -137,6 +137,7 @@ function StatusBox({
 
 function paymentStatus(header: {
   block_payment_done?: boolean;
+  block_payment_status?: string | null;
   sem_fee_under_review?: boolean;
   sem_fee_verified?: boolean;
 }): { value: string; tone: 'success' | 'warning' | 'muted' } {
@@ -146,7 +147,11 @@ function paymentStatus(header: {
   if (header.sem_fee_under_review) {
     return { value: 'Sem fee paid — under review', tone: 'warning' };
   }
-  if (header.block_payment_done) {
+  const blockStatus = String(header.block_payment_status || '').toLowerCase();
+  if (blockStatus.includes('partial')) {
+    return { value: 'Block payment - Partial', tone: 'warning' };
+  }
+  if (blockStatus.includes('full') || header.block_payment_done) {
     return { value: 'Block payment done', tone: 'success' };
   }
   return { value: 'Not started', tone: 'muted' };
@@ -400,6 +405,18 @@ export default function AdmissionJourneyDetailPage() {
                   </Pill>
                 )}
                 {header.unmatched_lsq && <Pill tone="muted">Unmatched in LSQ</Pill>}
+                {String(header.block_payment_status || '')
+                  .toLowerCase()
+                  .includes('partial') && <Pill tone="warning">Block payment - Partial</Pill>}
+                {(String(header.block_payment_status || '')
+                  .toLowerCase()
+                  .includes('full') ||
+                  (header.block_payment_done &&
+                    !String(header.block_payment_status || '')
+                      .toLowerCase()
+                      .includes('partial'))) && (
+                  <Pill tone="success">Block payment done</Pill>
+                )}
                 {header.clash && <Pill tone="warning">{header.clash_note?.split('. ')[0] || 'Clash'}</Pill>}
                 {header.clash_at_block && <Pill tone="warning">Clash at block</Pill>}
                 {header.clash_at_admission && <Pill tone="warning">Clash at admission</Pill>}
@@ -464,16 +481,54 @@ export default function AdmissionJourneyDetailPage() {
               <p className="text-[10px] uppercase tracking-widest text-text-secondary">Semester amount</p>
               <p className="text-lg font-semibold kpi-value mt-1">{formatMoney(header.amount_inr)}</p>
               <p className="text-[11px] text-text-secondary mt-1">
-                {header.paid_at ? `Paid ${formatWhen(header.paid_at)}` : header.dop ? `DOP ${formatWhen(header.dop)}` : 'No paid date'}
+                {header.sheet_status || '—'}
+                {header.paid_at ? ` · ${formatWhen(header.paid_at)}` : header.dop ? ` · DOP ${formatWhen(header.dop)}` : ''}
               </p>
+              {header.sem_utr && (
+                <p className="text-[10px] text-text-secondary mt-0.5 truncate" title={header.sem_utr}>
+                  UTR: {header.sem_utr}
+                </p>
+              )}
             </div>
-            <div className="panel border border-border p-3">
+            <div
+              className={cn(
+                'panel border p-3',
+                String(header.block_payment_status || '')
+                  .toLowerCase()
+                  .includes('partial')
+                  ? 'border-amber-400/50 bg-amber-400/5'
+                  : 'border-border'
+              )}
+            >
               <p className="text-[10px] uppercase tracking-widest text-text-secondary">Block amount</p>
               <p className="text-lg font-semibold kpi-value mt-1">{formatMoney(header.block_amount)}</p>
-              <p className="text-[11px] text-text-secondary mt-1">
-                {header.source_at_payment || 'No payment source'}
-                {header.campaign_at_payment ? ` · ${header.campaign_at_payment}` : ''}
+              <p
+                className={cn(
+                  'text-[11px] mt-1',
+                  String(header.block_payment_status || '')
+                    .toLowerCase()
+                    .includes('partial')
+                    ? 'text-amber-400 font-medium'
+                    : String(header.block_payment_status || '')
+                          .toLowerCase()
+                          .includes('full')
+                      ? 'text-success'
+                      : 'text-text-secondary'
+                )}
+              >
+                {header.block_payment_status || '—'}
               </p>
+              {(header.source_at_payment || header.campaign_at_payment) && (
+                <p className="text-[10px] text-text-secondary mt-0.5 truncate">
+                  {header.source_at_payment || 'No payment source'}
+                  {header.campaign_at_payment ? ` · ${header.campaign_at_payment}` : ''}
+                </p>
+              )}
+              {header.block_utr && (
+                <p className="text-[10px] text-text-secondary mt-0.5 truncate" title={header.block_utr}>
+                  UTR: {header.block_utr}
+                </p>
+              )}
             </div>
             <div className="panel border border-border p-3">
               <p className="text-[10px] uppercase tracking-widest text-text-secondary">LMS verified</p>
@@ -483,6 +538,11 @@ export default function AdmissionJourneyDetailPage() {
               <p className="text-[11px] text-text-secondary mt-1">
                 {header.lms_verified_on ? formatWhen(header.lms_verified_on) : header.lms_status || 'No LMS row'}
               </p>
+              {header.lms_utr && (
+                <p className="text-[10px] text-text-secondary mt-0.5 truncate" title={header.lms_utr}>
+                  UTR: {header.lms_utr}
+                </p>
+              )}
             </div>
             <div className="panel border border-border p-3">
               <p className="text-[10px] uppercase tracking-widest text-text-secondary">LMS payable</p>

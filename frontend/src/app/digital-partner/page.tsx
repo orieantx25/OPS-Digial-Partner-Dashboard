@@ -19,7 +19,7 @@ import { dpRefundInsightItems } from '@/lib/dp-refund-insights';
 import { useDatasetStats } from '@/hooks/use-dataset-stats';
 import { useLeadExplorerStore } from '@/store/lead-explorer-store';
 import { isLeadershipMode } from '@/lib/static-mode';
-import { cn, formatNumber, formatPct } from '@/lib/utils';
+import { cn, downloadBlob, formatNumber, formatPct } from '@/lib/utils';
 import { ChartData, KpiMetric } from '@/types';
 
 const ChartPanel = dynamic(
@@ -244,6 +244,13 @@ export default function ExecutivePage() {
   const displayKpis = kpis ?? EMPTY_KPIS;
   const displayCharts = { ...EMPTY_EXECUTIVE_CHARTS, ...(charts ?? {}) };
   const displayLeads = leads?.items ?? [];
+  const exportLeadSearch = async () => {
+    const csv = await api.exportCsv({
+      ...filters,
+      search: debouncedLeadSearch || filters.search,
+    });
+    downloadBlob(csv, 'executive_leads.csv');
+  };
   const blockAmountPoints = useMemo(
     () => buildBlockAmountPoints(displayCharts.partner_comparison),
     [displayCharts.partner_comparison]
@@ -482,6 +489,7 @@ export default function ExecutivePage() {
               if (row.partner) setDrillDown({ partner: String(row.partner), state: String(row.state) });
             }}
             exportFilename="executive_leads.csv"
+            onExport={exportLeadSearch}
             searchPlaceholder="Search ID, name, email, phone, partner, state..."
             searchValue={leadSearch}
             onSearchChange={setLeadSearch}

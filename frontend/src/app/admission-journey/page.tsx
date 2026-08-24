@@ -11,7 +11,7 @@ import { DataTable } from '@/components/tables/data-table';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { FetchingHint } from '@/components/dashboard/fetching-hint';
 import { AdmissionJourneyRow } from '@/types';
-import { cn, formatNumber } from '@/lib/utils';
+import { cn, downloadBlob, formatNumber } from '@/lib/utils';
 import { isLeadershipMode } from '@/lib/static-mode';
 import { useUploadStore } from '@/store/upload-store';
 
@@ -42,6 +42,12 @@ const CLASH_OPTIONS = [
   { value: 'block', label: 'Block' },
   { value: 'admission', label: 'Admission' },
   { value: 'false', label: 'No clash' },
+] as const;
+
+const BLOCK_STATUS_OPTIONS = [
+  { value: '', label: 'All' },
+  { value: 'full', label: 'Full' },
+  { value: 'partial', label: 'Partial' },
 ] as const;
 
 function formatCreated(value?: string | null): string {
@@ -155,6 +161,7 @@ export default function AdmissionJourneyPage() {
   const campus = searchParams.get('campus') || '';
   const clash = searchParams.get('clash') || '';
   const paid = searchParams.get('paid') || '';
+  const blockStatus = searchParams.get('block_status') || '';
   const page = Math.max(1, Number(searchParams.get('page') || '1') || 1);
   const [search, setSearch] = useState(searchParams.get('q') || '');
   const [syncing, setSyncing] = useState(false);
@@ -174,11 +181,12 @@ export default function AdmissionJourneyPage() {
         campus: campus || undefined,
         clash: clash || undefined,
         paid: paid || undefined,
+        blockStatus: blockStatus || undefined,
         search: debouncedSearch || undefined,
         page,
         pageSize: 50,
       }),
-    deps: [channel, campus, clash, paid, debouncedSearch, page],
+    deps: [channel, campus, clash, paid, blockStatus, debouncedSearch, page],
   });
 
   const rows = data?.items ?? [];
@@ -223,13 +231,21 @@ export default function AdmissionJourneyPage() {
       params.set('clash', 'block');
     } else if (tab === 'clash_admission') {
       params.set('clash', 'admission');
+    } else if (tab === 'block_full') {
+      params.set('block_status', 'full');
+    } else if (tab === 'block_partial') {
+      params.set('block_status', 'partial');
     }
     const qs = params.toString();
     router.push(qs ? `/admission-journey?${qs}` : '/admission-journey');
   };
 
   const listTitle =
-    clash === 'block'
+    blockStatus === 'full'
+      ? 'Block full payment'
+      : blockStatus === 'partial'
+        ? 'Block partial payment'
+        : clash === 'block'
       ? 'Clash at block amount'
       : clash === 'admission'
         ? 'Clash at admission'
@@ -248,6 +264,18 @@ export default function AdmissionJourneyPage() {
                     : paid === 'false'
                       ? 'Not paid'
                       : 'All admissions students';
+
+  const exportStudents = async () => {
+    const csv = await api.exportAdmissionJourneyStudents({
+      channel: channel === 'all' ? undefined : channel,
+      campus: campus || undefined,
+      clash: clash || undefined,
+      paid: paid || undefined,
+      blockStatus: blockStatus || undefined,
+      search: debouncedSearch || undefined,
+    });
+    downloadBlob(csv, 'admission_journey.csv');
+  };
 
   const columns: ColumnDef<AdmissionJourneyRow>[] = useMemo(
     () => [
@@ -273,6 +301,12 @@ export default function AdmissionJourneyPage() {
           row.original.sheet_is_paid
             ? row.original.sheet_status || 'Paid'
             : row.original.sheet_status || 'Unpaid',
+      },
+      {
+        accessorKey: 'block_payment_status',
+        header: 'Block',
+        meta: { minWidth: 110 },
+        cell: ({ getValue }) => String(getValue() || '—'),
       },
       {
         accessorKey: 'lsq_source',
@@ -314,10 +348,16 @@ export default function AdmissionJourneyPage() {
       {
         accessorKey: 'lms_status',
         header: 'Status',
-        meta: { minWidth: 150 },
+        meta: { minWidth: 170 },
         cell: ({ row }) => {
+          const blockStatus = String(row.original.block_payment_status || '').toLowerCase();
+          const blockLabel = blockStatus.includes('partial')
+            ? 'Block payment - Partial'
+            : blockStatus.includes('full') || row.original.block_payment_done
+              ? 'Block payment done'
+              : null;
           const parts = [
-            row.original.block_payment_done ? 'Block done' : null,
+            blockLabel,
             row.original.sem_fee_verified
               ? 'Sem verified'
               : row.original.sem_fee_under_review
@@ -325,12 +365,29 @@ export default function AdmissionJourneyPage() {
                 : null,
             row.original.refund_case ? 'Refund' : null,
           ].filter(Boolean);
-          return parts.length ? (
+          if (!parts.length) {
+            return String(row.original.lms_status || '—');
+          }
+          return (
             <span className="text-[10px] uppercase tracking-wide text-text-secondary">
-              {parts.join(' · ')}
+              {parts.map((part, idx) => {
+                const isPartial = part === 'Block payment - Partial';
+                const isFull = part === 'Block payment done';
+                return (
+                  <span key={part}>
+                    {idx > 0 ? ' · ' : null}
+                    <span
+                      className={cn(
+                        isPartial && 'text-amber-400',
+                        isFull && 'text-success'
+                      )}
+                    >
+                      {part}
+                    </span>
+                  </span>
+                );
+              })}
             </span>
-          ) : (
-            String(row.original.lms_status || '—')
           );
         },
       },
@@ -365,22 +422,47 @@ export default function AdmissionJourneyPage() {
     setSyncing(true);
     setSyncError(null);
     setSyncMessage('Starting lookup…');
+    const maxPolls = 900; // 15 minutes at 1s
+    const maxTransientErrors = 30;
+    let transientErrors = 0;
+    let finished = false;
     try {
       const started = await api.startAdmissionJourneySync();
       const jobId = started.job_id;
-      for (let i = 0; i < 600; i += 1) {
+      if (started.status === 'already_running') {
+        setSyncMessage('Resuming in-progress sync…');
+      }
+      for (let i = 0; i < maxPolls; i += 1) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        const job = await api.getAdmissionJourneySyncJob(jobId);
-        setSyncMessage(job.message || job.phase || 'Syncing…');
-        if (job.status === 'completed') {
-          setSyncMessage(job.message || 'Sync complete');
-          bumpDataRefresh();
-          await refetchStatus();
-          break;
+        try {
+          const job = await api.getAdmissionJourneySyncJob(jobId);
+          transientErrors = 0;
+          const pct = job.percent ? ` · ${Math.round(Number(job.percent))}%` : '';
+          setSyncMessage(`${job.message || job.phase || 'Syncing…'}${pct}`);
+          if (job.status === 'completed') {
+            setSyncMessage(job.message || 'Sync complete');
+            bumpDataRefresh();
+            await refetchStatus();
+            finished = true;
+            break;
+          }
+          if (job.status === 'failed') {
+            throw new Error(job.error || job.message || 'Sync failed');
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/not found|404/i.test(msg)) {
+            throw new Error('Sync job lost (backend may have restarted). Try Sync again.');
+          }
+          transientErrors += 1;
+          setSyncMessage('Waiting for backend…');
+          if (transientErrors >= maxTransientErrors) {
+            throw new Error('Lost connection to sync job. Try Sync again.');
+          }
         }
-        if (job.status === 'failed') {
-          throw new Error(job.error || job.message || 'Sync failed');
-        }
+      }
+      if (!finished) {
+        throw new Error('Sync timed out after 15 minutes. Try Sync again.');
       }
     } catch (err) {
       setSyncError(err instanceof Error ? err.message : 'Sync failed');
@@ -407,7 +489,7 @@ export default function AdmissionJourneyPage() {
               ) : (
                 <CloudDownload className="h-4 w-4" />
               )}
-              {syncing ? 'Syncing…' : 'Sync journeys'}
+              {syncing ? 'Syncing…' : 'Sync & deploy'}
             </button>
           ) : undefined
         }
@@ -419,7 +501,7 @@ export default function AdmissionJourneyPage() {
         <StatTab
           label="All students"
           value={status?.row_count ?? 0}
-          active={channel === 'all' && !clash && !paid}
+          active={channel === 'all' && !clash && !paid && !blockStatus}
           onClick={() => applyTab('students')}
         />
         <StatTab
@@ -476,6 +558,18 @@ export default function AdmissionJourneyPage() {
           active={clash === 'admission'}
           onClick={() => applyTab('clash_admission')}
         />
+        <StatTab
+          label="Block full"
+          value={status?.block_full_count ?? 0}
+          active={blockStatus === 'full'}
+          onClick={() => applyTab('block_full')}
+        />
+        <StatTab
+          label="Block partial"
+          value={status?.block_partial_count ?? 0}
+          active={blockStatus === 'partial'}
+          onClick={() => applyTab('block_partial')}
+        />
       </div>
 
       {(syncMessage || syncError || status?.last_synced_at) && (
@@ -522,6 +616,12 @@ export default function AdmissionJourneyPage() {
               options={CLASH_OPTIONS}
               onChange={(next) => patchFilters({ clash: next, page: 1 })}
             />
+            <FilterPills
+              label="Block"
+              value={blockStatus}
+              options={BLOCK_STATUS_OPTIONS}
+              onChange={(next) => patchFilters({ block_status: next, page: 1 })}
+            />
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] uppercase tracking-widest text-text-secondary">
                 Campus
@@ -554,6 +654,8 @@ export default function AdmissionJourneyPage() {
                   const qs = params.toString();
                   router.push(`/admission-journey/${row.journey_id}${qs ? `?${qs}` : ''}`);
                 }}
+                exportFilename="admission_journey.csv"
+                onExport={exportStudents}
                 searchPlaceholder="Search name, email, phone"
                 searchValue={search}
                 onSearchChange={(term) => {

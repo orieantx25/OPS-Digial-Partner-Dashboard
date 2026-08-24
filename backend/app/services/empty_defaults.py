@@ -302,6 +302,7 @@ def empty_dp_admissions() -> Dict[str, Any]:
         "total_paid": 0,
         "verified_sem1": 0,
         "dp_matched": 0,
+        "clash_at_admission": 0,
         "by_partner": [],
         "partner_chart": {
             "chart_id": "dp_admissions_by_partner",
@@ -323,6 +324,27 @@ def empty_dp_admissions() -> Dict[str, Any]:
             "by_campus_verified": [],
         },
         "rows": [],
+        "rows_total": 0,
+        "rows_truncated": False,
+    }
+
+
+def empty_admission_reconcile() -> Dict[str, Any]:
+    return {
+        "definitions": [],
+        "checks": [],
+        "ok": True,
+        "sheet_paid": 0,
+        "verified_sem1": 0,
+        "dp_matched": 0,
+        "journey_has_data": False,
+        "journey_total": 0,
+        "journey_paid": 0,
+        "journey_last_synced_at": None,
+        "master_admissions": 0,
+        "has_sheet": False,
+        "has_lms": False,
+        "has_master": False,
     }
 
 

@@ -7,7 +7,7 @@ import { useFetch, useDebouncedValue } from '@/hooks/use-fetch';
 import { useEffectiveFilters } from '@/store/app-store';
 import { useLeadExplorerStore } from '@/store/lead-explorer-store';
 import { DataTable, useLeadColumns } from '@/components/tables/data-table';
-import { formatNumber } from '@/lib/utils';
+import { downloadBlob, formatNumber } from '@/lib/utils';
 import { FilterParams } from '@/types';
 
 export function LeadExplorerDrawer() {
@@ -34,6 +34,11 @@ export function LeadExplorerDrawer() {
     deps: [JSON.stringify(filters)],
     enabled: isOpen,
   });
+
+  const handleExport = async () => {
+    const csv = await api.exportCsv(filters);
+    downloadBlob(csv, `leads-${filterKey || 'all'}.csv`);
+  };
 
   if (!isOpen) return null;
 
@@ -71,6 +76,7 @@ export function LeadExplorerDrawer() {
               data={(data?.items ?? []) as unknown as Record<string, unknown>[]}
               columns={columns}
               exportFilename={`leads-${filterKey || 'all'}.csv`}
+              onExport={handleExport}
               searchPlaceholder="Search ID, name, email, phone, partner, state..."
               searchValue={search}
               onSearchChange={setSearch}

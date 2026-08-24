@@ -116,7 +116,7 @@ export default function PortalHubPage() {
               Report hub
             </p>
             <h1 className="text-xl font-semibold tracking-tight">Analytics hub</h1>
-          </div>
+        </div>
         </div>
         <div className="flex items-center gap-4 text-sm shrink-0">
           {email && (
@@ -125,15 +125,15 @@ export default function PortalHubPage() {
             </span>
           )}
           {isPortalAuthEnabled() && (
-            <button
-              type="button"
+              <button
+                type="button"
               onClick={signOut}
               className="text-text-secondary hover:text-white text-[10px] uppercase tracking-[0.15em] transition-colors"
             >
               Sign out
             </button>
-          )}
-        </div>
+            )}
+          </div>
       </header>
 
       <main className="flex-1 flex flex-col justify-center w-full max-w-6xl mx-auto px-6 lg:px-10 py-10 lg:py-14">
@@ -150,7 +150,7 @@ export default function PortalHubPage() {
               <>
                 <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-sm bg-primary/10 border border-primary/25">
                   <Icon className="h-5 w-5 text-primary" strokeWidth={1.75} />
-                </div>
+          </div>
                 <h2 className="text-lg font-semibold tracking-tight mb-2 pr-6">{card.title}</h2>
                 <p className="text-sm text-text-secondary leading-relaxed flex-1 line-clamp-2">
                   {card.description}
@@ -170,21 +170,21 @@ export default function PortalHubPage() {
                     className="h-4 w-4 text-text-secondary opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200 group-hover:text-primary shrink-0"
                     strokeWidth={2}
                   />
-                </div>
+          </div>
               </>
             );
 
             if (card.external) {
               return (
-                <button
+              <button
                   key={card.id}
-                  type="button"
+                type="button"
                   onClick={openLoans}
                   disabled={loansLoading}
                   className={`${cardClass} text-left disabled:opacity-60 disabled:pointer-events-none`}
                 >
                   {inner}
-                </button>
+              </button>
               );
             }
 

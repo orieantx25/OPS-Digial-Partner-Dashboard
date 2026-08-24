@@ -9,6 +9,7 @@ import { useChartHeight } from '@/hooks/use-chart-height';
 import { DataTable } from '@/components/tables/data-table';
 import { SectionHeader } from '@/components/dashboard/section-header';
 import { FetchingHint } from '@/components/dashboard/fetching-hint';
+import { AdmissionReconcilePanel } from '@/components/dashboard/admission-reconcile-panel';
 import { CampusAdmissionRow, ChartData } from '@/types';
 import { cn, formatNumber } from '@/lib/utils';
 import { isStaticDataMode } from '@/lib/static-mode';
@@ -123,6 +124,7 @@ export default function CampusAdmissionsPage() {
               <div className="text-2xl font-semibold mt-1 text-green-500">
                 {formatNumber(verifiedSem1)}
               </div>
+              <p className="text-[10px] text-text-secondary mt-1">LMS sheet · Verified only</p>
             </div>
             <div className="panel p-4 border border-border">
               <div className="text-[10px] uppercase tracking-widest text-text-secondary">
@@ -153,11 +155,12 @@ export default function CampusAdmissionsPage() {
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
             <div className="panel p-4 border border-border">
               <div className="text-[10px] uppercase tracking-widest text-text-secondary">
-                Payments list rows
+                Sheet paid (All Payments)
               </div>
               <div className="text-2xl font-semibold mt-1">
                 {formatNumber(data.total_paid)}
               </div>
+              <p className="text-[10px] text-text-secondary mt-1">All sources · is_paid</p>
             </div>
             <div className="panel p-4 border border-border">
               <div className="text-[10px] uppercase tracking-widest text-text-secondary">
@@ -166,6 +169,7 @@ export default function CampusAdmissionsPage() {
               <div className="text-2xl font-semibold mt-1">
                 {formatNumber(data.matched_to_block)}
               </div>
+              <p className="text-[10px] text-text-secondary mt-1">Sheet paid ∩ block sheet</p>
             </div>
             <div className="panel p-4 border border-border col-span-2 lg:col-span-1">
               <div className="text-[10px] uppercase tracking-widest text-text-secondary">
@@ -174,8 +178,11 @@ export default function CampusAdmissionsPage() {
               <div className="text-2xl font-semibold mt-1">
                 {formatNumber(data.unmatched_to_block)}
               </div>
+              <p className="text-[10px] text-text-secondary mt-1">Sheet paid − block match</p>
             </div>
           </div>
+
+          <AdmissionReconcilePanel />
 
           {(statusChart || campusChart || genderChart) && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">

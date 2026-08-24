@@ -9,6 +9,8 @@ import { canUpload } from '@/hooks/use-auth-bootstrap';
 import { useFetch } from '@/hooks/use-fetch';
 import { useChartHeight } from '@/hooks/use-chart-height';
 import { DataTable } from '@/components/tables/data-table';
+import { DpAdmissionDetailDrawer } from '@/components/dashboard/dp-admission-detail-drawer';
+import { AdmissionReconcilePanel } from '@/components/dashboard/admission-reconcile-panel';
 import { PageHeader, SectionHeader } from '@/components/dashboard/section-header';
 import { DpAdmissionRow } from '@/types';
 import { cn, formatNumber } from '@/lib/utils';
@@ -29,6 +31,7 @@ export default function AdmissionsPage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [selectedRow, setSelectedRow] = useState<DpAdmissionRow | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [sheetRefresh, setSheetRefresh] = useState(0);
 
@@ -86,8 +89,19 @@ export default function AdmissionsPage() {
       { accessorKey: 'partner', header: 'Partner', meta: { width: '14%' } },
       { accessorKey: 'campus_code', header: 'Campus', meta: { width: '10%' } },
       { accessorKey: 'amount_inr', header: 'Amount', meta: { width: '10%' } },
-      { accessorKey: 'paid_at', header: 'Paid at', meta: { width: '12%' } },
+      { accessorKey: 'paid_at', header: 'Paid at', meta: { width: '11%' } },
       { accessorKey: 'status', header: 'Status', meta: { width: '8%' } },
+      {
+        accessorKey: 'clash_at_admission',
+        header: 'Clash',
+        meta: { width: '9%' },
+        cell: ({ row }) =>
+          row.original.clash_at_admission
+            ? 'Admission'
+            : row.original.clash_at_block
+              ? 'Block'
+              : '—',
+      },
     ],
     []
   );
@@ -171,13 +185,13 @@ export default function AdmissionsPage() {
       )}
 
       {loading && !data ? (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {Array.from({ length: 4 }).map((_, i) => (
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          {Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="panel h-[88px] border border-border animate-pulse" />
           ))}
         </div>
       ) : (
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <div className="panel p-4 border border-border">
           <div className="text-[10px] uppercase tracking-widest text-text-secondary">
             Sem1 verified (LMS)
@@ -185,22 +199,34 @@ export default function AdmissionsPage() {
           <div className="text-2xl font-semibold mt-1 text-green-500">
             {formatNumber(data?.verified_sem1 ?? sheetStatus?.verified_count ?? 0)}
           </div>
+          <p className="text-[10px] text-text-secondary mt-1">LMS sheet · Verified only</p>
         </div>
         <div className="panel p-4 border border-border">
           <div className="text-[10px] uppercase tracking-widest text-text-secondary">
-            Paid on payments sheet
+            Sheet paid (All Payments)
           </div>
           <div className="text-2xl font-semibold mt-1">
             {formatNumber(data?.total_paid ?? sheetStatus?.paid_count ?? 0)}
           </div>
+          <p className="text-[10px] text-text-secondary mt-1">All sources · is_paid</p>
         </div>
         <div className="panel p-4 border border-border">
           <div className="text-[10px] uppercase tracking-widest text-text-secondary">
-            DP matched
+            DP matched paid
           </div>
           <div className="text-2xl font-semibold mt-1">
             {formatNumber(data?.dp_matched ?? 0)}
           </div>
+          <p className="text-[10px] text-text-secondary mt-1">Sheet paid ∩ DP LSQ</p>
+        </div>
+        <div className="panel p-4 border border-border">
+          <div className="text-[10px] uppercase tracking-widest text-text-secondary">
+            Clash at admission
+          </div>
+          <div className="text-2xl font-semibold mt-1 text-amber-400">
+            {formatNumber(data?.clash_at_admission ?? 0)}
+          </div>
+          <p className="text-[10px] text-text-secondary mt-1">Among DP matched</p>
         </div>
         <div className="panel p-4 border border-border">
           <div className="text-[10px] uppercase tracking-widest text-text-secondary">
@@ -212,6 +238,8 @@ export default function AdmissionsPage() {
         </div>
       </div>
       )}
+
+      <AdmissionReconcilePanel />
 
       {(data?.fee_status?.status_chart || data?.partner_chart) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -236,21 +264,29 @@ export default function AdmissionsPage() {
 
       <SectionHeader
         title="DP admissions"
-        subtitle={`${formatNumber(leadership ? data?.dp_matched ?? 0 : rows.length)} ${
-          leadership ? 'matched' : 'rows'
-        }`}
+        subtitle={
+          data?.rows_truncated
+            ? `Showing ${formatNumber(rows.length)} of ${formatNumber(data.rows_total ?? data.dp_matched ?? 0)} DP matched · click a row for full details`
+            : `Paid admissions matched to DP leads · ${formatNumber(leadership ? data?.dp_matched ?? 0 : rows.length)} ${
+                leadership ? 'matched' : 'rows'
+              } · click a row for full details`
+        }
       />
 
       {loading && !data ? (
         <p className="text-text-secondary text-sm">Loading...</p>
       ) : leadership ? null : (
-        <DataTable
-          data={rows}
-          columns={columns}
-          exportFilename="dp_admissions.csv"
-          searchPlaceholder="Search email, partner, campus…"
-          height="auto"
-        />
+        <>
+          <DataTable
+            data={rows}
+            columns={columns}
+            onRowClick={setSelectedRow}
+            exportFilename="dp_admissions.csv"
+            searchPlaceholder="Search email, partner, campus…"
+            height="auto"
+          />
+          <DpAdmissionDetailDrawer row={selectedRow} onClose={() => setSelectedRow(null)} />
+        </>
       )}
     </div>
   );

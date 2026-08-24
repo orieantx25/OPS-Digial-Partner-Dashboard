@@ -90,13 +90,14 @@ def _seed_sheets(settings):
     return adm_svc
 
 
-def test_resolve_block_payment_status_prefers_sheet_then_50k_rule():
-    assert resolve_block_payment_status("Full Payment", "5000") == "Full Payment"
+def test_resolve_block_payment_status_prefers_sheet_then_above_500_rule():
+    assert resolve_block_payment_status("Full Payment", "100") == "Full Payment"
     assert resolve_block_payment_status("Partial Payment", "50000") == "Partial Payment"
     assert resolve_block_payment_status(None, "50000") == "Full Payment"
-    assert resolve_block_payment_status("", "5000") == "Partial Payment"
-    assert resolve_block_payment_status("Paid", "5000") == "Partial Payment"
-    assert resolve_block_payment_status("Paid", "50,000") == "Full Payment"
+    assert resolve_block_payment_status("", "5000") == "Full Payment"
+    assert resolve_block_payment_status("Paid", "501") == "Full Payment"
+    assert resolve_block_payment_status("Paid", "500") == "Partial Payment"
+    assert resolve_block_payment_status(None, "100") == "Partial Payment"
     assert resolve_block_payment_status(None, None) is None
 
 

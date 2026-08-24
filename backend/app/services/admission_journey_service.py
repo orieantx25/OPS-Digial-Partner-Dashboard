@@ -574,7 +574,7 @@ def _display(value: Any) -> Optional[str]:
     return text or None
 
 
-BLOCK_FULL_AMOUNT_INR = 50_000
+BLOCK_FULL_AMOUNT_INR = 500
 
 
 def _block_amount_sql(column: str = "block_amount_paid_sheet") -> str:
@@ -587,18 +587,18 @@ def _block_amount_sql(column: str = "block_amount_paid_sheet") -> str:
 
 
 def _block_status_filter_sql(kind: str) -> str:
-    """SQL for full/partial using sheet status first, else ₹50k rule."""
+    """SQL for full/partial using sheet status first, else amount > ₹500 = Full."""
     status = "LOWER(COALESCE(block_payment_status, ''))"
     amount = _block_amount_sql()
     has_full = f"({status} LIKE '%full%' AND {status} NOT LIKE '%partial%' AND {status} NOT LIKE '%partly%')"
     has_partial = f"({status} LIKE '%partial%' OR {status} LIKE '%partly%')"
     no_fp = f"(NOT {has_full} AND NOT {has_partial})"
     if kind in {"full", "full_payment"}:
-        return f"({has_full} OR ({no_fp} AND {amount} >= {BLOCK_FULL_AMOUNT_INR}))"
+        return f"({has_full} OR ({no_fp} AND {amount} > {BLOCK_FULL_AMOUNT_INR}))"
     if kind in {"partial", "partial_payment"}:
         return (
             f"({has_partial} OR ({no_fp} AND {amount} IS NOT NULL "
-            f"AND {amount} > 0 AND {amount} < {BLOCK_FULL_AMOUNT_INR}))"
+            f"AND {amount} > 0 AND {amount} <= {BLOCK_FULL_AMOUNT_INR}))"
         )
     raise ValueError(f"Unknown block status filter: {kind}")
 
@@ -643,13 +643,13 @@ def _full_or_partial_from_text(status: Any) -> Optional[str]:
 
 
 def resolve_block_payment_status(status: Any = None, amount: Any = None) -> Optional[str]:
-    """Prefer sheet full/partial; else treat ₹50,000 as full block and below as partial."""
+    """Prefer sheet full/partial; else amount above ₹500 = Full, else Partial if > 0."""
     from_sheet = _full_or_partial_from_text(status)
     if from_sheet:
         return from_sheet
     amt = _parse_amount_inr(amount)
     if amt is not None and amt > 0:
-        if amt >= BLOCK_FULL_AMOUNT_INR:
+        if amt > BLOCK_FULL_AMOUNT_INR:
             return "Full Payment"
         return "Partial Payment"
     return _display(status)

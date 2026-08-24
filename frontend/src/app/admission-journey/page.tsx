@@ -46,7 +46,7 @@ const CLASH_OPTIONS = [
 
 const BLOCK_STATUS_OPTIONS = [
   { value: '', label: 'All' },
-  { value: 'full', label: 'Full (≥ ₹50k)' },
+  { value: 'full', label: 'Full (above ₹500)' },
   { value: 'partial', label: 'Partial' },
 ] as const;
 
@@ -105,25 +105,57 @@ function StatTab({
   label,
   value,
   hint,
+  tone = 'neutral',
   active,
   onClick,
+  showHint = true,
 }: {
   label: string;
   value: number;
   hint?: string;
+  tone?: 'neutral' | 'primary' | 'success' | 'warning' | 'danger' | 'info';
   active?: boolean;
   onClick?: () => void;
+  showHint?: boolean;
 }) {
+  const toneClass =
+    tone === 'primary'
+      ? 'border-primary/35 bg-primary/5'
+      : tone === 'success'
+        ? 'border-green-500/35 bg-green-500/5'
+        : tone === 'warning'
+          ? 'border-amber-400/35 bg-amber-400/5'
+          : tone === 'danger'
+            ? 'border-red-500/35 bg-red-500/5'
+            : tone === 'info'
+              ? 'border-sky-400/35 bg-sky-400/5'
+              : 'border-border';
+  const valueClass =
+    tone === 'primary'
+      ? 'text-primary'
+      : tone === 'success'
+        ? 'text-green-500'
+        : tone === 'warning'
+          ? 'text-amber-400'
+          : tone === 'danger'
+            ? 'text-red-500'
+            : tone === 'info'
+              ? 'text-sky-400'
+              : 'text-text';
   const className = cn(
-    'panel p-3 border text-left w-full',
-    onClick && 'cursor-pointer hover:border-primary/50',
-    active ? 'border-primary bg-primary/10' : 'border-border'
+    'panel p-3 border text-left w-full transition-colors',
+    onClick && 'cursor-pointer hover:brightness-110',
+    active ? 'border-primary bg-primary/15 ring-1 ring-primary/40' : toneClass
   );
   const body = (
     <>
       <p className="text-[10px] uppercase tracking-widest text-text-secondary">{label}</p>
-      <p className="text-lg font-semibold mt-1">{formatNumber(value)}</p>
-      {hint ? <p className="text-[10px] text-text-secondary mt-1 leading-snug">{hint}</p> : null}
+      <p className={cn('text-lg font-semibold mt-1 tabular-nums', active ? 'text-primary' : valueClass)}>
+        {formatNumber(value)}
+      </p>
+      {showHint && hint ? (
+        <p className="text-[10px] text-text-secondary mt-1 leading-snug">{hint}</p>
+      ) : null}
     </>
   );
   if (!onClick) {
@@ -139,17 +171,21 @@ function StatTab({
 function MetricGroup({
   title,
   definition,
+  showDefinition = true,
   children,
 }: {
   title: string;
-  definition: string;
+  definition?: string;
+  showDefinition?: boolean;
   children: ReactNode;
 }) {
   return (
     <section className="space-y-2">
       <div>
         <h3 className="text-[11px] uppercase tracking-widest text-text-secondary">{title}</h3>
-        <p className="text-xs text-text-secondary mt-0.5">{definition}</p>
+        {showDefinition && definition ? (
+          <p className="text-xs text-text-secondary mt-0.5">{definition}</p>
+        ) : null}
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">{children}</div>
     </section>
@@ -520,49 +556,62 @@ export default function AdmissionJourneyPage() {
 
       <FetchingHint active={isFetching && !loading} />
 
-      <div className="panel border border-border p-3 sm:p-4 space-y-1.5 text-xs text-text-secondary">
-        <p>
-          <span className="text-text font-medium">Block</span> = block amount payment (earlier).{' '}
-          <span className="text-text font-medium">Admission</span> = semester fee on All Payments
-          (later).
-        </p>
-        <p>
-          Clash at block / admission means a counsellor or influencer payment source on a DP-origin
-          lead at that stage. A student can have both.
-        </p>
-      </div>
+      {!leadership && (
+        <div className="panel border border-border p-3 sm:p-4 space-y-1.5 text-xs text-text-secondary">
+          <p>
+            <span className="text-text font-medium">Block</span> = block amount payment (earlier).{' '}
+            <span className="text-text font-medium">Admission</span> = semester fee on All Payments
+            (later).
+          </p>
+          <p>
+            Clash at block / admission means a counsellor or influencer payment source on a
+            DP-origin lead at that stage. A student can have both.
+          </p>
+        </div>
+      )}
 
       <div className="space-y-5">
         <MetricGroup
           title="Universe & channel"
           definition="All Payments students in this journey store after sync."
+          showDefinition={!leadership}
         >
           <StatTab
             label="All students"
+            tone="primary"
+            showHint={!leadership}
             value={status?.row_count ?? 0}
             active={channel === 'all' && !clash && !paid && !blockStatus}
             onClick={() => applyTab('students')}
           />
           <StatTab
             label="Digital partner"
+            tone="info"
+            showHint={!leadership}
             value={status?.dp_count ?? 0}
             active={channel === 'digital_partner'}
             onClick={() => applyTab('dp')}
           />
           <StatTab
             label="Counsellor"
+            tone="warning"
+            showHint={!leadership}
             value={status?.counsellor_count ?? 0}
             active={channel === 'counsellor'}
             onClick={() => applyTab('counsellor')}
           />
           <StatTab
             label="Other source"
+            tone="neutral"
+            showHint={!leadership}
             value={status?.other_count ?? 0}
             active={channel === 'other'}
             onClick={() => applyTab('other')}
           />
           <StatTab
             label="Unmatched in LSQ"
+            tone="danger"
+            showHint={!leadership}
             value={status?.unmatched_lsq ?? 0}
             active={channel === 'unmatched_lsq'}
             onClick={() => applyTab('unmatched')}
@@ -571,11 +620,14 @@ export default function AdmissionJourneyPage() {
 
         <MetricGroup
           title="Block amount"
-          definition="Block payment status from sheet (or ≥ ₹50,000 = Full). Not semester fee."
+          definition="Block payment status from sheet (or amount above ₹500 = Full). Not semester fee."
+          showDefinition={!leadership}
         >
           <StatTab
             label="Block full"
             hint="Block amount done"
+            tone="success"
+            showHint={!leadership}
             value={status?.block_full_count ?? 0}
             active={blockStatus === 'full'}
             onClick={() => applyTab('block_full')}
@@ -583,6 +635,8 @@ export default function AdmissionJourneyPage() {
           <StatTab
             label="Block partial"
             hint="Block amount · Partial"
+            tone="warning"
+            showHint={!leadership}
             value={status?.block_partial_count ?? 0}
             active={blockStatus === 'partial'}
             onClick={() => applyTab('block_partial')}
@@ -590,6 +644,8 @@ export default function AdmissionJourneyPage() {
           <StatTab
             label="Clash at block"
             hint="Clash when block amount paid"
+            tone="danger"
+            showHint={!leadership}
             value={status?.clash_at_block ?? 0}
             active={clash === 'block'}
             onClick={() => applyTab('clash_block')}
@@ -599,10 +655,13 @@ export default function AdmissionJourneyPage() {
         <MetricGroup
           title="Admission (semester fee)"
           definition="Sem fee paid = All Payments is_paid. This is admission in this journey — not block amount."
+          showDefinition={!leadership}
         >
           <StatTab
             label="Sem fee paid"
             hint="Admission"
+            tone="success"
+            showHint={!leadership}
             value={status?.paid_count ?? 0}
             active={paid === 'true'}
             onClick={() => applyTab('paid')}
@@ -610,6 +669,8 @@ export default function AdmissionJourneyPage() {
           <StatTab
             label="Sem fee not paid"
             hint="Still in journey · unpaid"
+            tone="neutral"
+            showHint={!leadership}
             value={status?.unpaid_count ?? 0}
             active={paid === 'false'}
             onClick={() => applyTab('unpaid')}
@@ -617,6 +678,8 @@ export default function AdmissionJourneyPage() {
           <StatTab
             label="Clash at admission"
             hint="Clash when sem fee paid"
+            tone="danger"
+            showHint={!leadership}
             value={status?.clash_at_admission ?? 0}
             active={clash === 'admission'}
             onClick={() => applyTab('clash_admission')}
@@ -624,6 +687,8 @@ export default function AdmissionJourneyPage() {
           <StatTab
             label="All clashes"
             hint="Block and/or admission"
+            tone="warning"
+            showHint={!leadership}
             value={status?.clash_count ?? 0}
             active={clash === 'true'}
             onClick={() => applyTab('clash')}

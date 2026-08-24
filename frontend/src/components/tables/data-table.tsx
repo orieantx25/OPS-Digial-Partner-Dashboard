@@ -143,10 +143,15 @@ export function DataTable<T extends object>({
   }, [rows, table, exportFilename, onExport]);
 
   const emptyPx = 64;
+  const HEADER_PX = 40;
+  // Auto mode must include the sticky header; otherwise the last row is clipped
+  // (overflowY: hidden) — e.g. ADYPU missing under "2 campuses".
   const contentHeight =
     rows.length === 0
       ? emptyPx
-      : Math.min(rows.length * ROW_PX + 4, typeof height === 'number' ? height : 480);
+      : height === 'auto'
+        ? rows.length * ROW_PX + HEADER_PX + 4
+        : Math.min(rows.length * ROW_PX + HEADER_PX + 4, height);
   const scrollHeight =
     height === 'auto'
       ? contentHeight

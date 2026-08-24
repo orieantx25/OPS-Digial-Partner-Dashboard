@@ -418,8 +418,10 @@ export default function AdmissionJourneyDetailPage() {
                   <Pill tone="success">Block payment done</Pill>
                 )}
                 {header.clash && <Pill tone="warning">{header.clash_note?.split('. ')[0] || 'Clash'}</Pill>}
-                {header.clash_at_block && <Pill tone="warning">Clash at block</Pill>}
-                {header.clash_at_admission && <Pill tone="warning">Clash at admission</Pill>}
+                {header.clash_at_block && <Pill tone="warning">Clash at block amount</Pill>}
+                {header.clash_at_admission && (
+                  <Pill tone="warning">Clash at admission (sem fee)</Pill>
+                )}
               </div>
             </div>
 

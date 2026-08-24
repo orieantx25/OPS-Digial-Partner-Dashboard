@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ColumnDef } from '@tanstack/react-table';
 import { CloudDownload, Loader2 } from 'lucide-react';
@@ -33,20 +33,20 @@ const CHANNEL_OPTIONS = [
 const PAID_OPTIONS = [
   { value: '', label: 'All' },
   { value: 'true', label: 'Sem fee paid' },
-  { value: 'false', label: 'Not paid' },
+  { value: 'false', label: 'Sem fee not paid' },
 ] as const;
 
 const CLASH_OPTIONS = [
   { value: '', label: 'All' },
-  { value: 'true', label: 'Clash' },
-  { value: 'block', label: 'Block' },
-  { value: 'admission', label: 'Admission' },
+  { value: 'true', label: 'Any clash' },
+  { value: 'block', label: 'At block amount' },
+  { value: 'admission', label: 'At admission (sem fee)' },
   { value: 'false', label: 'No clash' },
 ] as const;
 
 const BLOCK_STATUS_OPTIONS = [
   { value: '', label: 'All' },
-  { value: 'full', label: 'Full' },
+  { value: 'full', label: 'Full (≥ ₹50k)' },
   { value: 'partial', label: 'Partial' },
 ] as const;
 
@@ -104,11 +104,13 @@ function FilterPills({
 function StatTab({
   label,
   value,
+  hint,
   active,
   onClick,
 }: {
   label: string;
   value: number;
+  hint?: string;
   active?: boolean;
   onClick?: () => void;
 }) {
@@ -117,19 +119,40 @@ function StatTab({
     onClick && 'cursor-pointer hover:border-primary/50',
     active ? 'border-primary bg-primary/10' : 'border-border'
   );
+  const body = (
+    <>
+      <p className="text-[10px] uppercase tracking-widest text-text-secondary">{label}</p>
+      <p className="text-lg font-semibold mt-1">{formatNumber(value)}</p>
+      {hint ? <p className="text-[10px] text-text-secondary mt-1 leading-snug">{hint}</p> : null}
+    </>
+  );
   if (!onClick) {
-    return (
-      <div className={className}>
-        <p className="text-[10px] uppercase tracking-widest text-text-secondary">{label}</p>
-        <p className="text-lg font-semibold mt-1">{formatNumber(value)}</p>
-      </div>
-    );
+    return <div className={className}>{body}</div>;
   }
   return (
     <button type="button" className={className} onClick={onClick}>
-      <p className="text-[10px] uppercase tracking-widest text-text-secondary">{label}</p>
-      <p className="text-lg font-semibold mt-1">{formatNumber(value)}</p>
+      {body}
     </button>
+  );
+}
+
+function MetricGroup({
+  title,
+  definition,
+  children,
+}: {
+  title: string;
+  definition: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-2">
+      <div>
+        <h3 className="text-[11px] uppercase tracking-widest text-text-secondary">{title}</h3>
+        <p className="text-xs text-text-secondary mt-0.5">{definition}</p>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">{children}</div>
+    </section>
   );
 }
 
@@ -242,15 +265,15 @@ export default function AdmissionJourneyPage() {
 
   const listTitle =
     blockStatus === 'full'
-      ? 'Block full payment'
+      ? 'Block amount · Full'
       : blockStatus === 'partial'
-        ? 'Block partial payment'
+        ? 'Block amount · Partial'
         : clash === 'block'
       ? 'Clash at block amount'
       : clash === 'admission'
-        ? 'Clash at admission'
+        ? 'Clash at admission (sem fee)'
         : clash === 'true'
-          ? 'Clashes'
+          ? 'All clashes'
           : channel === 'unmatched_lsq'
             ? 'Unmatched in LSQ'
             : channel === 'digital_partner'
@@ -260,9 +283,9 @@ export default function AdmissionJourneyPage() {
                 : channel === 'other'
                   ? 'Other'
                   : paid === 'true'
-                    ? 'Sem fee paid'
+                    ? 'Admission · Sem fee paid'
                     : paid === 'false'
-                      ? 'Not paid'
+                      ? 'Admission · Sem fee not paid'
                       : 'All admissions students';
 
   const exportStudents = async () => {
@@ -295,8 +318,8 @@ export default function AdmissionJourneyPage() {
       },
       {
         accessorKey: 'sheet_status',
-        header: 'Payment',
-        meta: { minWidth: 110 },
+        header: 'Sem fee (admission)',
+        meta: { minWidth: 120 },
         cell: ({ row }) =>
           row.original.sheet_is_paid
             ? row.original.sheet_status || 'Paid'
@@ -304,7 +327,7 @@ export default function AdmissionJourneyPage() {
       },
       {
         accessorKey: 'block_payment_status',
-        header: 'Block',
+        header: 'Block amount',
         meta: { minWidth: 110 },
         cell: ({ getValue }) => String(getValue() || '—'),
       },
@@ -404,7 +427,7 @@ export default function AdmissionJourneyPage() {
         cell: ({ row }) => {
           if (!row.original.is_clash) return '—';
           const parts = [
-            row.original.clash_at_block ? 'Block' : null,
+            row.original.clash_at_block ? 'Block amount' : null,
             row.original.clash_at_admission ? 'Admission' : null,
           ].filter(Boolean);
           return (
@@ -497,79 +520,115 @@ export default function AdmissionJourneyPage() {
 
       <FetchingHint active={isFetching && !loading} />
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <StatTab
-          label="All students"
-          value={status?.row_count ?? 0}
-          active={channel === 'all' && !clash && !paid && !blockStatus}
-          onClick={() => applyTab('students')}
-        />
-        <StatTab
-          label="Sem fee paid"
-          value={status?.paid_count ?? 0}
-          active={paid === 'true'}
-          onClick={() => applyTab('paid')}
-        />
-        <StatTab
-          label="Not paid"
-          value={status?.unpaid_count ?? 0}
-          active={paid === 'false'}
-          onClick={() => applyTab('unpaid')}
-        />
-        <StatTab
-          label="Digital partner"
-          value={status?.dp_count ?? 0}
-          active={channel === 'digital_partner'}
-          onClick={() => applyTab('dp')}
-        />
-        <StatTab
-          label="Counsellor"
-          value={status?.counsellor_count ?? 0}
-          active={channel === 'counsellor'}
-          onClick={() => applyTab('counsellor')}
-        />
-        <StatTab
-          label="Other source"
-          value={status?.other_count ?? 0}
-          active={channel === 'other'}
-          onClick={() => applyTab('other')}
-        />
-        <StatTab
-          label="Unmatched in LSQ"
-          value={status?.unmatched_lsq ?? 0}
-          active={channel === 'unmatched_lsq'}
-          onClick={() => applyTab('unmatched')}
-        />
-        <StatTab
-          label="All clashes"
-          value={status?.clash_count ?? 0}
-          active={clash === 'true'}
-          onClick={() => applyTab('clash')}
-        />
-        <StatTab
-          label="Clash at block"
-          value={status?.clash_at_block ?? 0}
-          active={clash === 'block'}
-          onClick={() => applyTab('clash_block')}
-        />
-        <StatTab
-          label="Clash at admission"
-          value={status?.clash_at_admission ?? 0}
-          active={clash === 'admission'}
-          onClick={() => applyTab('clash_admission')}
-        />
-        <StatTab
-          label="Block full"
-          value={status?.block_full_count ?? 0}
-          active={blockStatus === 'full'}
-          onClick={() => applyTab('block_full')}
-        />
-        <StatTab
-          label="Block partial"
-          value={status?.block_partial_count ?? 0}
-          active={blockStatus === 'partial'}
-          onClick={() => applyTab('block_partial')}
-        />
+      <div className="panel border border-border p-3 sm:p-4 space-y-1.5 text-xs text-text-secondary">
+        <p>
+          <span className="text-text font-medium">Block</span> = block amount payment (earlier).{' '}
+          <span className="text-text font-medium">Admission</span> = semester fee on All Payments
+          (later).
+        </p>
+        <p>
+          Clash at block / admission means a counsellor or influencer payment source on a DP-origin
+          lead at that stage. A student can have both.
+        </p>
+      </div>
+
+      <div className="space-y-5">
+        <MetricGroup
+          title="Universe & channel"
+          definition="All Payments students in this journey store after sync."
+        >
+          <StatTab
+            label="All students"
+            value={status?.row_count ?? 0}
+            active={channel === 'all' && !clash && !paid && !blockStatus}
+            onClick={() => applyTab('students')}
+          />
+          <StatTab
+            label="Digital partner"
+            value={status?.dp_count ?? 0}
+            active={channel === 'digital_partner'}
+            onClick={() => applyTab('dp')}
+          />
+          <StatTab
+            label="Counsellor"
+            value={status?.counsellor_count ?? 0}
+            active={channel === 'counsellor'}
+            onClick={() => applyTab('counsellor')}
+          />
+          <StatTab
+            label="Other source"
+            value={status?.other_count ?? 0}
+            active={channel === 'other'}
+            onClick={() => applyTab('other')}
+          />
+          <StatTab
+            label="Unmatched in LSQ"
+            value={status?.unmatched_lsq ?? 0}
+            active={channel === 'unmatched_lsq'}
+            onClick={() => applyTab('unmatched')}
+          />
+        </MetricGroup>
+
+        <MetricGroup
+          title="Block amount"
+          definition="Block payment status from sheet (or ≥ ₹50,000 = Full). Not semester fee."
+        >
+          <StatTab
+            label="Block full"
+            hint="Block amount done"
+            value={status?.block_full_count ?? 0}
+            active={blockStatus === 'full'}
+            onClick={() => applyTab('block_full')}
+          />
+          <StatTab
+            label="Block partial"
+            hint="Block amount · Partial"
+            value={status?.block_partial_count ?? 0}
+            active={blockStatus === 'partial'}
+            onClick={() => applyTab('block_partial')}
+          />
+          <StatTab
+            label="Clash at block"
+            hint="Clash when block amount paid"
+            value={status?.clash_at_block ?? 0}
+            active={clash === 'block'}
+            onClick={() => applyTab('clash_block')}
+          />
+        </MetricGroup>
+
+        <MetricGroup
+          title="Admission (semester fee)"
+          definition="Sem fee paid = All Payments is_paid. This is admission in this journey — not block amount."
+        >
+          <StatTab
+            label="Sem fee paid"
+            hint="Admission"
+            value={status?.paid_count ?? 0}
+            active={paid === 'true'}
+            onClick={() => applyTab('paid')}
+          />
+          <StatTab
+            label="Sem fee not paid"
+            hint="Still in journey · unpaid"
+            value={status?.unpaid_count ?? 0}
+            active={paid === 'false'}
+            onClick={() => applyTab('unpaid')}
+          />
+          <StatTab
+            label="Clash at admission"
+            hint="Clash when sem fee paid"
+            value={status?.clash_at_admission ?? 0}
+            active={clash === 'admission'}
+            onClick={() => applyTab('clash_admission')}
+          />
+          <StatTab
+            label="All clashes"
+            hint="Block and/or admission"
+            value={status?.clash_count ?? 0}
+            active={clash === 'true'}
+            onClick={() => applyTab('clash')}
+          />
+        </MetricGroup>
       </div>
 
       {(syncMessage || syncError || status?.last_synced_at) && (
@@ -605,7 +664,7 @@ export default function AdmissionJourneyPage() {
               onChange={(next) => patchFilters({ channel: next, page: 1 })}
             />
             <FilterPills
-              label="Sem fee"
+              label="Sem fee (admission)"
               value={paid}
               options={PAID_OPTIONS}
               onChange={(next) => patchFilters({ paid: next, page: 1 })}
@@ -617,7 +676,7 @@ export default function AdmissionJourneyPage() {
               onChange={(next) => patchFilters({ clash: next, page: 1 })}
             />
             <FilterPills
-              label="Block"
+              label="Block amount"
               value={blockStatus}
               options={BLOCK_STATUS_OPTIONS}
               onChange={(next) => patchFilters({ block_status: next, page: 1 })}
